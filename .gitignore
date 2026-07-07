@@ -18,3 +18,14 @@ scratch/
 dist/__mocks__/
 dist/*.test.js
 dist/**/*.test.js
+
+# Archived artifacts
+*.rar
+
+# Runtime logs (kept in logs/ but not versioned)
+logs/*.log
+logs/*.txt
+
+# Local build artifacts
+archive/
+.kimchi/*

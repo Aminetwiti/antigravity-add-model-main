@@ -2,6 +2,35 @@
 
 This repository contains a patch for **Google Antigravity** that enables external AI models (OpenAI, Anthropic, Together API, Ollama, Google AI Studio, and any OpenAI-compatible provider) alongside the built-in Gemini models. It injects a local HTTP proxy into the Electron app, reverse-engineers the Cloud Code internal API (`v1internal`), translates request/response formats between providers, and provides an inline "Add Model" UI in the Settings page.
 
+## Table of Contents
+
+- [How It Works](#how-it-works)
+  - [Architecture](#architecture)
+  - [Key Components](#key-components)
+  - [Cloud Code API Reverse Engineering](#cloud-code-api-reverse-engineering)
+  - [Request/Response Flow](#requestresponse-flow)
+  - [Streaming Fix (Critical)](#streaming-fix-critical)
+  - [Anthropic Tool Calling](#anthropic-tool-calling)
+  - [Security: API Key Encryption](#security-api-key-encryption)
+  - [Dynamic Port Management](#dynamic-port-management)
+  - [Parallel Request Isolation](#parallel-request-isolation)
+  - [Automatic State Cleanup](#automatic-state-cleanup)
+  - [Schema Validation](#schema-validation)
+  - [Model Connectivity Test](#model-connectivity-test)
+  - [Request Retry & Rate Limiting](#request-retry--rate-limiting)
+- [Repository Structure](#repository-structure)
+- [Supported Providers](#supported-providers)
+- [Installation](#installation)
+- [Antigravity Update Recovery](#antigravity-update-recovery)
+- [Configuration](#configuration)
+- [UI Features](#ui-features)
+- [Security Considerations](#security-considerations)
+- [Troubleshooting](#troubleshooting)
+- [Developer Guide](#developer-guide)
+- [Changelog](#changelog)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## How It Works
 
 ### Architecture
@@ -48,12 +77,22 @@ Antigravity IDE
 | [languageServer.ts](src/languageServer.ts) | Modified language server manager, starts proxy on app launch |
 
 #### Deployment Scripts
-| File | Platform |
+
+| File | Location | Platform |
+|---|---|---|
+| [deploy.ps1](scripts/deploy/deploy.ps1) | `scripts/deploy/` | Windows — stops Antigravity, packs `dist/` into `app.asar`, restarts |
+| [deploy.sh](scripts/deploy/deploy.sh) | `scripts/deploy/` | macOS — extracts `app.asar` from `/Applications/`, replaces `dist/`, repacks and relaunches |
+| [deploy_linux.sh](scripts/deploy/deploy_linux.sh) | `scripts/deploy/` | Linux — auto-detects installation path across standard Electron app directories |
+| [repack.ps1](scripts/repack/repack.ps1) | `scripts/repack/` | Repacks existing `app.asar` with updated `dist/` files |
+| [mitm_443.js](scripts/mitm/mitm_443.js) | `scripts/mitm/` | MITM HTTPS proxy on port 443 (requires admin) |
+| [start_mitm_443.ps1](scripts/mitm/start_mitm_443.ps1) | `scripts/mitm/` | Windows launcher for MITM proxy |
+
+#### Top-level launchers
+
+| File | Purpose |
 |---|---|
-| [deploy.ps1](deploy.ps1) | Windows — stops Antigravity, packs `dist/` into `app.asar`, restarts |
-| [deploy.sh](deploy.sh) | macOS — extracts `app.asar` from `/Applications/`, replaces `dist/`, repacks and relaunches |
-| [deploy_linux.sh](deploy_linux.sh) | Linux — auto-detects installation path across standard Electron app directories |
-| [repack.ps1](repack.ps1) | Repacks existing `app.asar` with updated `dist/` files |
+| [repatch.bat](repatch.bat) | One-click Windows: `npm run build` + `scripts/deploy/deploy.ps1` |
+| [Start Antigravity MITM.bat](Start%20Antigravity%20MITM.bat) | One-click Windows: launches MITM proxy as admin |
 
 > [!NOTE]
 > The codebase was migrated from JavaScript (`dist/`) to **TypeScript** (`src/`) in v2.0.3. All source code lives under `src/` and compiles to `dist/` via `npx tsc`. The compiled `dist/` files are what get packed into `app.asar`.
@@ -110,7 +149,7 @@ All API keys are encrypted at rest using **AES-256-GCM** via Electron's `safeSto
 - **Transparent encryption/decryption**: Keys are encrypted before writing to disk, decrypted on-the-fly when loaded into memory.
 - **Auto-migration**: On first run after the encryption update, any legacy plaintext `custom_models.json` config is automatically detected, encrypted, and rewritten.
 - **Masked display**: API keys in the UI are shown as `sk-...XXXX` (last 4 chars only) to prevent shoulder-surfing.
-- **OS-level key storage**: On macOS, `safeStorage` uses the Keychain; on Windows, it uses DPAPI.
+- **OS-level key storage**: Backed by Electron's [`safeStorage`](https://www.electronjs.org/docs/latest/api/safe-storage) API (macOS Keychain / Windows DPAPI / Linux libsecret).
 
 ### Dynamic Port Management
 
@@ -169,62 +208,109 @@ Each custom model in Settings has a **"Test Connection"** button that sends a li
 
 ### Request Retry & Rate Limiting
 
-The proxy automatically retries failed requests with exponential backoff:
+The proxy automatically retries failed requests with exponential backoff (see [src/proxy/retryStrategy.ts](src/proxy/retryStrategy.ts)):
 
-- **Triggers**: 429 (Rate Limit), 502, 503, 504 (Server Errors)
-- **Backoff**: 1s → 2s → 4s → 8s (max 3 retries)
-- **Retry-After**: Respects server-sent `Retry-After` header
-- **Configurable**: `maxRetries` field in model config (default: 3)
+- **Triggers**: 429 (Rate Limit) and any 5xx server error (500–599)
+- **5xx backoff**: 1s → 2s → 4s (max 3 retries, base = 1s)
+- **429 backoff**: 2s → 4s → 8s (max 3 retries, base = 2s)
+- **Retry-After**: Respects server-sent `Retry-After` header when present
+- **Configurable**: `maxRetries` field in model config (default: 3, range: 0���5)
 
 ## Repository Structure
 
 ```
 antigravity-add-model/
-├── src/
-│   ├── proxy.ts                   # HTTP proxy + Cloud Code interceptor + format translation
-│   ├── proxy/
-│   │   ├── registry.ts            # Auto-discovery translator registry
-│   │   ├── shared.ts              # Cross-turn state management + TTL cleanup
-│   │   ├── modelUtils.ts          # Centralized model capability detection
-│   │   └── translators/
-│   │       ├── openai.ts          # OpenAI ↔ Gemini translator
-│   │       ├── anthropic.ts       # Anthropic ↔ Gemini translator
-│   │       ├── google.ts          # Google AI Studio passthrough + stream routing
-│   │       └── utils.ts           # Shared translator utilities (DSML, tool calls)
-│   ├── languageServer.ts          # Modified language server manager
-│   ├── ipcHandlers.ts             # Custom model CRUD + connectivity test IPC
-│   ├── cryptoStore.ts             # AES-256-GCM API key encryption/decryption
-│   ├── schemaValidator.ts         # Runtime schema validation for responses & models
-│   ├── preload.ts                 # Settings UI injection (inline Add Model dashboard)
-│   ├── main.ts                    # App lifecycle + SetCloudCodeURL blocking
-│   ├── constants.ts               # Port & cert constants
-│   ├── paths.ts                   # Path utilities
-│   ├── storage.ts                 # StorageManager class
-│   ├── menu.ts                    # Application menu
-│   ├── tray.ts                    # System tray
-│   ├── updater.ts                 # Auto-updater
-│   ├── customScheme.ts            # Plugin scheme handler
-│   ├── keybindings.ts             # Keyboard shortcuts
-│   ├── loadingOverlay.ts          # Loading screen overlay
-│   ├── types.ts                   # Type definitions
-│   ├── utils.ts                   # Window management & utilities
-│   ├── services/
-│   │   └── settingsService.ts
-│   ├── ideInstall/                # IDE installation wizard
-│   ├── __tests__/                  # Unit tests (vitest)
-│   │   ├── registry.test.ts
-│   │   ├── proxy.test.ts
-│   │   ├── modelUtils.test.ts
-│   │   ├── anthropic.test.ts
-│   │   ├── openai.test.ts
-│   │   └── utils.test.ts
-│   ├── __mocks__/                 # Test mocks
-├── dist/                          # Compiled JavaScript output
+├── docs/                          # Project documentation
+│   ├── ANTIGRAVITY_SETUP.md       # Full setup guide
+│   └── MITM-Notes.md              # Quick MITM launcher notes
+├── scripts/                       # Build, deploy, repack, MITM scripts
+│   ├── deploy/                    # OS-specific deploy scripts
+│   │   ├── deploy.ps1             # Windows
+│   │   ├── deploy.sh              # macOS
+│   │   └── deploy_linux.sh        # Linux
+│   ├── repack/                    # ASAR repack scripts
+│   │   ├── repack.ps1
+│   │   ├── repack_safe.sh
+│   │   └── extract_asar.js
+│   └── mitm/                      # MITM HTTPS proxy scripts
+│       ├── mitm_443.js
+│       └── start_mitm_443.ps1
+├── logs/                          # Runtime logs
+├── archive/                       # Archived artifacts (.rar, snapshots)
+├── src/                           # TypeScript source code (see below)
+├── assets/                        # UI screenshots & icons
+│   ├── *.png                      # Documentation screenshots
+│   └── icons/                     # Tray and app icons
+├── certs/                         # Bundled TLS certificates
+├── dist/                          # Compiled JavaScript output (gitignored)
 ├── tsconfig.json                  # TypeScript configuration
-├── deploy.ps1                     # Portable PowerShell deploy script
-├── repack.ps1                     # ASAR repack script
-├── package.json                   # Electron app manifest
-└── README.md
+├── eslint.config.mjs              # ESLint flat config
+├── vitest.config.ts               # Vitest test configuration
+├── package.json                   # Electron app manifest + scripts
+├── package-lock.json              # Locked dependency tree
+├── repatch.bat                    # Windows one-click repatch + redeploy
+├── Start Antigravity MITM.bat     # Windows one-click MITM launcher (admin)
+├── LICENSE                        # Apache-2.0
+└── README.md                      # This file
+```
+
+### Source layout (`src/`)
+
+```
+src/
+├── proxy.ts                       # HTTP proxy + Cloud Code interceptor + format translation
+├── proxy/
+│   ├── registry.ts                # Auto-discovery translator registry
+│   ├── shared.ts                  # Cross-turn state management + TTL cleanup
+│   ├── modelUtils.ts              # Centralized model capability detection
+│   ├── jsonRepair.ts              # Safe JSON repair (replaces eval())
+│   ├── retryStrategy.ts           # Pure retry delay/backoff functions
+│   ├── urlBuilder.ts              # URL construction for custom model requests
+│   ├── protoInjector.ts           # Protobuf injection for GetAvailableModels
+│   ├── idGenerator.ts             # Deterministic placeholder ID generation (DJB2)
+│   ├── protobuf.ts                # Protobuf encode/decode utilities
+│   ├── modelLoader.ts             # Custom model loading with encryption migration
+│   ├── types.ts                   # Shared TypeScript types
+│   └── translators/
+│       ├── openai.ts              # OpenAI ↔ Gemini translator
+│       ├── anthropic.ts           # Anthropic ↔ Gemini translator
+│       ├── google.ts              # Google AI Studio passthrough + stream routing
+│       ├── ollama.ts              # Ollama ↔ Gemini translator
+│       └── utils.ts               # Shared translator utilities (DSML, tool calls)
+├── languageServer.ts              # Modified language server manager
+├── ipcHandlers.ts                 # Custom model CRUD + connectivity test IPC
+├── cryptoStore.ts                 # AES-256-GCM API key encryption/decryption
+├── schemaValidator.ts             # Runtime schema validation for responses & models
+├── preload.ts                     # Settings UI injection (inline Add Model dashboard)
+├── main.ts                        # App lifecycle + SetCloudCodeURL blocking
+├── constants.ts                   # Port, cert, provider, retry constants (single source of truth)
+├── paths.ts                       # Path utilities
+├── storage.ts                     # StorageManager class
+├── menu.ts                        # Application menu
+├── tray.ts                        # System tray
+├── updater.ts                     # Auto-updater
+├── customScheme.ts                # Plugin scheme handler
+├── keybindings.ts                 # Keyboard shortcuts
+├── loadingOverlay.ts              # Loading screen overlay
+├── types.ts                       # Type definitions
+├── utils.ts                       # Window management & utilities
+├── services/
+│   └── settingsService.ts
+├── ideInstall/                    # IDE installation wizard
+└── __tests__/                     # Unit tests (vitest)
+    ├── registry.test.ts
+    ├── proxy.test.ts
+    ├── modelUtils.test.ts
+    ├── anthropic.test.ts
+    ├── openai.test.ts
+    ├── utils.test.ts
+    ├── idGenerator.test.ts
+    ├── modelLoader.test.ts
+    ├── protoInjector.test.ts
+    ├── protobuf.test.ts
+    ├── retryStrategy.test.ts
+    ├── urlBuilder.test.ts
+    └── jsonRepair.test.ts
 ```
 
 ## Supported Providers
@@ -282,7 +368,7 @@ Or double-click `repatch.bat` in the project folder. This rebuilds, redeploys th
 ### Automatic (Windows)
 
 ```powershell
-.\deploy.ps1
+.\scripts\deploy\deploy.ps1
 ```
 
 This stops Antigravity, packs the project's `dist/` into `app.asar`, deploys to `%LOCALAPPDATA%\Programs\antigravity\resources\`, and restarts the app.
@@ -293,24 +379,24 @@ This stops Antigravity, packs the project's `dist/` into `app.asar`, deploys to 
 ### Automatic (macOS)
 
 ```bash
-bash deploy.sh
+bash scripts/deploy/deploy.sh
 ```
 
 This kills any running Antigravity process, extracts the current `app.asar` from `/Applications/Antigravity.app/Contents/Resources/`, replaces its `dist/` with the latest build, re-packages, and relaunches the app.
 
 > [!TIP]
-> Make the script executable first: `chmod +x deploy.sh`. Like the Windows version, it auto-detects the project directory via `$SCRIPT_DIR`.
+> Make the script executable first: `chmod +x scripts/deploy/deploy.sh`. Like the Windows version, it auto-detects the project directory via `$SCRIPT_DIR`.
 
 ### Automatic (Linux)
 
 ```bash
-bash deploy_linux.sh
+bash scripts/deploy/deploy_linux.sh
 ```
 
 Stops any running Antigravity process, auto-detects the `app.asar` location (common search paths: `~/.local/share/Programs/`, `/opt/`, `/usr/lib/`), replaces its `dist/` with the latest build, re-packages, and relaunches the app.
 
 > [!TIP]
-> Make the script executable first: `chmod +x deploy_linux.sh`. It automatically searches for the Antigravity installation across multiple standard Linux Electron app paths.
+> Make the script executable first: `chmod +x scripts/deploy/deploy_linux.sh`. It automatically searches for the Antigravity installation across multiple standard Linux Electron app paths.
 
 ### Build from Source (TypeScript)
 
@@ -367,14 +453,14 @@ When Google releases a new Antigravity version (e.g., v2.0.7, v2.1.0):
 ```powershell
 # Windows (PowerShell)
 npm run build
-powershell -ExecutionPolicy Bypass -File ".\deploy.ps1"
+powershell -ExecutionPolicy Bypass -File ".\scripts\deploy\deploy.ps1"
 ```
 
 ```bash
 # macOS / Linux
 npm run build
-bash deploy.sh        # macOS
-bash deploy_linux.sh  # Linux
+bash scripts/deploy/deploy.sh        # macOS
+bash scripts/deploy/deploy_linux.sh  # Linux
 ```
 
 > [!IMPORTANT]
@@ -635,7 +721,7 @@ npx tsc --watch      # Watch mode for development
 
 - **Strict mode**: `strict: true` in `tsconfig.json` (target: ES2020, module: CommonJS)
 - **Centralized types**: Model capabilities in `modelUtils.ts`, shared state in `shared.ts`
-- **No `eval()`**: JSON repair uses `repairPartialJson()` instead of dangerous `eval()` calls
+- **No `eval()`**: Malformed upstream JSON is repaired by [src/proxy/jsonRepair.ts](src/proxy/jsonRepair.ts) (`repairPartialJson`) using only string-level transformations and standard `JSON.parse`. No `Function()` constructor or `eval()` is ever used.
 - **No `any` in critical paths**: Request/response mapping uses explicit interfaces
 
 ### Debug Mode
@@ -675,7 +761,7 @@ Set `DEBUG=antigravity:*` for verbose logging (debug level captures stream parse
 - **Package**: Added `Apache-2.0` license field to `package.json`
 
 ### v2.0.2
-- **Security**: Replaced `eval()` with safe `repairPartialJson()` (code injection fix)
+- **Security**: Replaced any potential `eval()` paths with safe `repairPartialJson()` in [src/proxy/jsonRepair.ts](src/proxy/jsonRepair.ts) (code injection fix).
 - **Security**: SSL bypass now only when `allowUnauthorized: true` (not all custom providers)
 - **Security**: Removed diagnostic `api_response_raw.json` disk writes
 - **Security**: Added 10MB request body size limit

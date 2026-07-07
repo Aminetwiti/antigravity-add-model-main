@@ -11,4 +11,4 @@ Double-cliquer `Antigravity.exe` habituellement.
 Les modèles `MiniMax M3 (Kimchi)` et `kimi-k2.7` doivent apparaître.
 
 ## Docs complètes
-Voir `C:\Users\amine\Downloads\antigravity-add-model-main\antigravity-add-model-main\ANTIGRAVITY_SETUP.md`
+Voir [ANTIGRAVITY_SETUP.md](../docs/ANTIGRAVITY_SETUP.md)

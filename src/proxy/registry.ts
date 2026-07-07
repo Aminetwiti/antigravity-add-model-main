@@ -76,11 +76,11 @@ function loadTranslators(): void {
 // Source of truth: src/constants.ts (PROVIDERS + ALL_PROVIDERS).
 // To add a provider: add it to PROVIDERS in constants.ts, then place it in
 // the appropriate compat set below.
-const OPENAI_COMPAT = new Set<ProviderName>([
+const OPENAI_COMPAT: ReadonlySet<string> = new Set<string>([
   'openai', 'ollama', 'openrouter', 'custom', 'groq', 'mistral',
   'cerebras', 'nvidia', 'opencode', 'codestral',
 ]);
-const ANTHROPIC_COMPAT = new Set<ProviderName>([
+const ANTHROPIC_COMPAT: ReadonlySet<string> = new Set<string>([
   'anthropic', 'deepseek', 'kimi', 'fireworks', 'lmstudio', 'llamacpp',
   'wafer', 'zai',
 ]);

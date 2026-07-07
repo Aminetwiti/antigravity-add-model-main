@@ -1,7 +1,7 @@
 {
   "name": "antigravity",
   "productName": "Antigravity",
-  "version": "2.0.3",
+  "version": "2.1.0",
   "description": "Antigravity - Agentic Desktop Application",
   "homepage": "https://antigravity.google",
   "author": {
@@ -19,7 +19,12 @@
     "lint:fix": "npx eslint src/**/*.ts --fix",
     "format": "npx prettier --write \"src/**/*.ts\"",
     "format:check": "npx prettier --check \"src/**/*.ts\"",
-    "clean": "npx tsc --build --clean"
+    "clean": "npx tsc --build --clean",
+    "deploy:win": "powershell -ExecutionPolicy Bypass -File .\\scripts\\deploy\\deploy.ps1",
+    "deploy:mac": "bash scripts/deploy/deploy.sh",
+    "deploy:linux": "bash scripts/deploy/deploy_linux.sh",
+    "repack": "powershell -ExecutionPolicy Bypass -File .\\scripts\\repack\\repack.ps1",
+    "mitm": "powershell -ExecutionPolicy Bypass -File .\\scripts\\mitm\\start_mitm_443.ps1"
   },
   "dependencies": {
     "chrome-devtools-mcp": "^0.23.0",
