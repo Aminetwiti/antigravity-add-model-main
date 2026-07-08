@@ -3,8 +3,9 @@
  */
 import type { CommandContext } from '../../types';
 import { restorePatch } from '../../core/binary-patch';
+import { snapshotBefore } from '../../core/snapshot';
 import { confirm } from '../../cli/prompts';
-import { ok, error, warn } from '../../cli/output';
+import { ok, error, warn, info } from '../../cli/output';
 
 export async function runPatchRestore(ctx: CommandContext): Promise<number> {
   if (!ctx.yes) {
@@ -14,6 +15,8 @@ export async function runPatchRestore(ctx: CommandContext): Promise<number> {
       return 1;
     }
   }
+  const snap = snapshotBefore('patch restore');
+  if (snap) info(`Snapshot ${snap.id} created`);
   const r = restorePatch();
   if (!r.ok) {
     error(r.message);

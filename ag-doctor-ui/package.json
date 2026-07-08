@@ -5,11 +5,16 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "node scripts/copy-assets.js && tsc -p tsconfig.json",
+    "build:cli": "cd ../ag-doctor && npm install && npm run build",
+    "prebuild": "node scripts/copy-assets.js && tsc -p tsconfig.json",
+    "prepack": "npm run build && cd ../ag-doctor && npm install --omit=dev && npm run build",
     "watch": "tsc -p tsconfig.json --watch",
     "start": "npm run build && electron .",
     "dev": "tsc -p tsconfig.json --watch & electron .",
     "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder"
+    "dist": "npm run build && electron-builder",
+    "dist:portable": "npm run build && electron-builder --win portable",
+    "dist:dir": "npm run build && electron-builder --dir"
   },
   "keywords": [
     "antigravity",
@@ -37,8 +42,32 @@
       "assets/**/*",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "../ag-doctor/bin",
+        "to": "ag-doctor/bin"
+      },
+      {
+        "from": "../ag-doctor/dist",
+        "to": "ag-doctor/dist"
+      },
+      {
+        "from": "../ag-doctor/node_modules",
+        "to": "ag-doctor/node_modules"
+      },
+      {
+        "from": "../ag-doctor/package.json",
+        "to": "ag-doctor/package.json"
+      }
+    ],
     "win": {
-      "target": "nsis"
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "ag-doctor-${version}-portable.${ext}"
     },
     "mac": {
       "target": "dmg"

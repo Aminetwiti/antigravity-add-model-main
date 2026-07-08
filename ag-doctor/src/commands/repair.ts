@@ -11,6 +11,7 @@ import { checkPatch } from '../checks/patch';
 import { applyPatch } from '../core/binary-patch';
 import { isPortInUse, killAntigravityProcesses } from '../core/process';
 import { ensureDataDir } from '../core/custom-models';
+import { snapshotBefore } from '../core/snapshot';
 import { c, header, ok, warn, error, info } from '../cli/output';
 import { confirm } from '../cli/prompts';
 import { Spinner } from '../cli/spinner';
@@ -36,6 +37,10 @@ export async function runRepair(ctx: CommandContext): Promise<number> {
     ok('Nothing to repair');
     return 0;
   }
+
+  // Snapshot before mutating anything (covers patch apply + models file)
+  const snap = snapshotBefore('repair');
+  if (snap) info(`Snapshot ${snap.id} created`);
 
   info('Planned actions:');
   for (const a of actions) console.log(`  ${c.cyan('•')} ${a}`);

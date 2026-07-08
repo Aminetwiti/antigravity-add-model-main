@@ -71,13 +71,24 @@ export function applyPatch(installDir?: string): { ok: boolean; message: string 
   }
   const backupPath = binaryPath + '.bak';
   if (!fs.existsSync(backupPath)) {
-    fs.copyFileSync(binaryPath, backupPath);
+    try {
+      fs.copyFileSync(binaryPath, backupPath);
+    } catch (e) {
+      return { ok: false, message: `Failed to create backup: ${(e as Error).message}` };
+    }
   }
   const target = Buffer.from(PATCHED_URL, 'binary');
-  Buffer.from(buf).copy(target, 0, 0, 0); // no-op, just to satisfy types
   const out = Buffer.from(buf);
   target.copy(out, idx);
-  fs.writeFileSync(binaryPath, out);
+  try {
+    fs.writeFileSync(binaryPath, out);
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === 'EBUSY') {
+      return { ok: false, message: 'language_server is running. Close Antigravity and retry.' };
+    }
+    return { ok: false, message: `Failed to write binary: ${err.message}` };
+  }
   return { ok: true, message: `Patched (backup at ${backupPath})` };
 }
 

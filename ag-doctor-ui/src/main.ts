@@ -1,28 +1,192 @@
 /**
  * Electron main process.
  * Creates the BrowserWindow, registers IPC handlers, and spawns the ag-doctor CLI.
+ *
+ * Performance optimizations:
+ *  - CLI Worker Pool: long-lived Node.js processes that handle multiple commands via
+ *    JSON-over-stdin. Eliminates per-call process spawn cost (~150-300ms each).
+ *  - Cached asset paths and tray icons.
+ *  - Streaming batches chunks to avoid IPC flooding.
+ *  - No console-message forwarding in production.
  */
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, Notification, type NativeImage } from 'electron';
 import path from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import fs from 'fs';
 
 const isDev = !app.isPackaged;
+const isProd = !isDev;
 let mainWindow: BrowserWindow | null = null;
+let tray: Tray | null = null;
 const activeStreams = new Map<string, ChildProcess>();
 
-/**
- * Locate the ag-doctor CLI.
- * In dev: ../ag-doctor/bin/ag-doctor.js
- * In prod: bundled in resources/
- */
-function getCliPath(): string {
-  if (app.isPackaged) {
-    // Bundled next to the app
-    return path.join(process.resourcesPath, 'ag-doctor', 'bin', 'ag-doctor.js');
+// Disable GPU sandbox in packaged builds to avoid startup crashes on some Windows setups
+app.commandLine.appendSwitch('disable-gpu');
+app.commandLine.appendSwitch('no-sandbox');
+app.commandLine.appendSwitch('disable-software-rasterizer');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cached paths (computed once)
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _assetsPath: string | null = null;
+let _cliPath: string | null = null;
+let _configPath: string | null = null;
+
+function getAssetsPath(): string {
+  if (_assetsPath === null) {
+    _assetsPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'assets')
+      : path.join(__dirname, '..', '..', 'assets');
   }
-  // Dev: sibling directory
-  return path.join(__dirname, '..', '..', 'ag-doctor', 'bin', 'ag-doctor.js');
+  return _assetsPath;
+}
+
+function getCliPath(): string {
+  if (_cliPath === null) {
+    if (app.isPackaged) {
+      // In a packaged portable build, the CLI is bundled in extraResources
+      // at <resources>/ag-doctor/bin/ag-doctor.js
+      _cliPath = path.join(process.resourcesPath, 'ag-doctor', 'bin', 'ag-doctor.js');
+    } else {
+      _cliPath = path.join(__dirname, '..', '..', 'ag-doctor', 'bin', 'ag-doctor.js');
+    }
+  }
+  return _cliPath;
+}
+
+function getConfigPath(): string {
+  if (_configPath === null) {
+    _configPath = path.join(app.getPath('home'), '.gemini', 'antigravity', 'config.json');
+  }
+  return _configPath;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cached tray icons
+// ─────────────────────────────────────────────────────────────────────────────
+
+const trayIconCache = new Map<'ok' | 'warn' | 'err', NativeImage>();
+
+function getTrayIcon(status: 'ok' | 'warn' | 'err'): NativeImage {
+  const cached = trayIconCache.get(status);
+  if (cached) return cached;
+  const svgPath = path.join(getAssetsPath(), `tray-${status}.svg`);
+  let img: NativeImage;
+  if (fs.existsSync(svgPath)) {
+    img = nativeImage.createFromPath(svgPath).resize({ width: 16, height: 16 });
+  } else {
+    const fallback = path.join(getAssetsPath(), 'icon.svg');
+    if (fs.existsSync(fallback)) {
+      img = nativeImage.createFromPath(fallback).resize({ width: 16, height: 16 });
+    } else {
+      img = nativeImage.createFromPath(svgPath);
+    }
+  }
+  trayIconCache.set(status, img);
+  return img;
+}
+
+function readUiTheme(): 'dark' | 'light' {
+  try {
+    const raw = fs.readFileSync(getConfigPath(), 'utf-8');
+    const cfg = JSON.parse(raw);
+    return cfg?.ui?.theme === 'light' ? 'light' : 'dark';
+  } catch {
+    return 'dark';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cached IPC payloads — eliminate redundant disk reads and object construction
+// ─────────────────────────────────────────────────────────────────────────────
+
+// `info` is static for the session lifetime (platform/versions/CLI path don't change)
+const infoCache = {
+  platform: process.platform,
+  arch: process.arch,
+  versions: process.versions,
+  electron: process.versions.electron,
+  node: process.versions.node,
+  chrome: process.versions.chrome,
+  cliPath: '' as string, // populated lazily by getCliPath()
+};
+let infoCacheReady = false;
+function getInfoPayload() {
+  if (!infoCacheReady) {
+    infoCache.cliPath = getCliPath();
+    infoCacheReady = true;
+  }
+  return infoCache;
+}
+
+// `config` is read from disk every call. Cache it; invalidate on theme change.
+let configCache: Record<string, unknown> | null = null;
+function getConfigPayload(): Record<string, unknown> {
+  if (configCache) return configCache;
+  try {
+    const raw = fs.readFileSync(getConfigPath(), 'utf-8');
+    configCache = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    configCache = { ui: { theme: 'dark' } };
+  }
+  return configCache;
+}
+function invalidateConfigCache(): void {
+  configCache = null;
+}
+
+function updateTray(status: 'ok' | 'warn' | 'err'): void {
+  if (!tray) return;
+  tray.setImage(getTrayIcon(status));
+  tray.setToolTip(`ag-doctor · ${status.toUpperCase()}`);
+}
+
+function buildTrayMenu(): Menu {
+  return Menu.buildFromTemplate([
+    {
+      label: 'Open dashboard',
+      click: () => {
+        if (mainWindow) {
+          mainWindow.show();
+          mainWindow.focus();
+        } else {
+          createWindow();
+        }
+      },
+    },
+    {
+      label: 'Run doctor',
+      click: () => {
+        if (mainWindow) {
+          mainWindow.show();
+          mainWindow.focus();
+          mainWindow.webContents.send('ag:run-doctor');
+        }
+      },
+    },
+    { type: 'separator' },
+    {
+      label: 'Quit',
+      click: () => {
+        app.quit();
+      },
+    },
+  ]);
+}
+
+function createTray(): void {
+  tray = new Tray(getTrayIcon('ok'));
+  tray.setToolTip('ag-doctor');
+  tray.setContextMenu(buildTrayMenu());
+  tray.on('click', () => {
+    if (mainWindow) {
+      mainWindow.show();
+      mainWindow.focus();
+    } else {
+      createWindow();
+    }
+  });
 }
 
 function createWindow(): void {
@@ -43,8 +207,9 @@ function createWindow(): void {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,
       spellcheck: false,
+      backgroundThrottling: false,
     },
   });
 
@@ -54,6 +219,26 @@ function createWindow(): void {
     mainWindow?.show();
   });
 
+  setTimeout(() => {
+    if (mainWindow && !mainWindow.isVisible()) {
+      mainWindow.show();
+    }
+  }, 2000);
+
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    console.error(`[main] did-fail-load: ${code} ${desc} ${url}`);
+  });
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    console.error(`[main] render-process-gone: ${JSON.stringify(details)}`);
+  });
+
+  // Only forward console messages in dev mode (saves IPC overhead in prod)
+  if (isDev) {
+    mainWindow.webContents.on('console-message', (_e, level, message) => {
+      console.log(`[renderer] ${message}`);
+    });
+  }
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
@@ -62,42 +247,209 @@ function createWindow(): void {
   if (isDev && process.env.OPEN_DEVTOOLS === '1') {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   }
+
+  mainWindow.on('close', (e) => {
+    if (process.platform === 'darwin') {
+      e.preventDefault();
+      mainWindow?.hide();
+    }
+  });
 }
 
-// ──────────────────────────────────────────────��──────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// CLI Worker Pool — keeps long-lived Node.js processes that handle commands
+// via JSON-over-stdin. Avoids the 150-300ms cost of spawning a new process
+// for every IPC call.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface CliWorker {
+  proc: ChildProcess;
+  busy: boolean;
+  pending: {
+    resolve: (val: { code: number; stdout: string; stderr: string }) => void;
+    reject: (err: Error) => void;
+  } | null;
+  buffer: string;      // stdout buffer (JSON protocol)
+  errBuffer: string;   // stderr accumulator (diagnostics only)
+}
+
+class CliWorkerPool {
+  private workers: CliWorker[] = [];
+  private readonly maxWorkers = 3;
+  private readonly cliPath: string;
+  private nextId = 1;
+  private readonly waitQueue: Array<{
+    args: string[];
+    resolve: (val: { code: number; stdout: string; stderr: string }) => void;
+    reject: (err: Error) => void;
+  }> = [];
+
+  constructor(cliPath: string) {
+    this.cliPath = cliPath;
+  }
+
+  private spawnWorker(): CliWorker | null {
+    if (!fs.existsSync(this.cliPath)) return null;
+    const proc = spawn(process.execPath, [this.cliPath, '--worker'], {
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', AG_WORKER_ID: String(this.nextId++) },
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const worker: CliWorker = { proc, busy: false, pending: null, buffer: '', errBuffer: '' };
+    proc.stdout?.on('data', (chunk: Buffer) => this.handleData(worker, chunk));
+    proc.stderr?.on('data', (chunk: Buffer) => { worker.errBuffer += chunk.toString(); }); // don't mix into JSON protocol
+    proc.on('close', () => this.handleClose(worker));
+    proc.on('error', (err) => this.handleError(worker, err));
+    this.workers.push(worker);
+    return worker;
+  }
+
+  private handleData(worker: CliWorker, chunk: Buffer, _isStderr = false): void {
+    worker.buffer += chunk.toString();
+    // Newline-delimited JSON protocol
+    let idx: number;
+    while ((idx = worker.buffer.indexOf('\n')) >= 0) {
+      const line = worker.buffer.slice(0, idx);
+      worker.buffer = worker.buffer.slice(idx + 1);
+      if (!line) continue;
+      if (worker.pending) {
+        try {
+          const msg = JSON.parse(line);
+          worker.pending.resolve({
+            code: msg.code ?? 0,
+            stdout: msg.stdout ?? '',
+            stderr: msg.stderr ?? '',
+          });
+        } catch {
+          worker.pending.resolve({ code: 0, stdout: line, stderr: '' });
+        }
+        worker.pending = null;
+        worker.busy = false;
+        this.dispatchNext();
+      }
+    }
+  }
+
+  private handleClose(worker: CliWorker): void {
+    if (worker.pending) {
+      worker.pending.reject(new Error('CLI worker closed unexpectedly'));
+      worker.pending = null;
+    }
+    worker.busy = false;
+    const idx = this.workers.indexOf(worker);
+    if (idx >= 0) this.workers.splice(idx, 1);
+    this.dispatchNext();
+  }
+
+  private handleError(worker: CliWorker, err: Error): void {
+    if (worker.pending) {
+      worker.pending.reject(err);
+      worker.pending = null;
+    }
+    worker.busy = false;
+  }
+
+  private dispatchNext(): void {
+    if (this.waitQueue.length === 0) return;
+    const idle = this.workers.find((w) => !w.busy);
+    if (!idle) return;
+    const next = this.waitQueue.shift()!;
+    this.runOn(idle, next.args).then(next.resolve).catch(next.reject);
+  }
+
+  private async runOn(worker: CliWorker, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+    return new Promise((resolve, reject) => {
+      worker.busy = true;
+      worker.pending = { resolve, reject };
+      try {
+        worker.proc.stdin?.write(JSON.stringify({ args }) + '\n');
+      } catch (err) {
+        worker.pending = null;
+        worker.busy = false;
+        reject(err as Error);
+      }
+    });
+  }
+
+  async run(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+    if (!fs.existsSync(this.cliPath)) {
+      return { code: -1, stdout: '', stderr: `CLI not found: ${this.cliPath}` };
+    }
+    // Try to find an idle worker
+    const idle = this.workers.find((w) => !w.busy);
+    if (idle) {
+      return this.runOn(idle, args);
+    }
+    // Spawn a new worker if under cap
+    if (this.workers.length < this.maxWorkers) {
+      const w = this.spawnWorker();
+      if (w) return this.runOn(w, args);
+    }
+    // Queue
+    return new Promise((resolve, reject) => {
+      this.waitQueue.push({ args, resolve, reject });
+    });
+  }
+
+  shutdown(): void {
+    for (const w of this.workers) {
+      try { w.proc.stdin?.end(); } catch { /* ignore */ }
+      try { w.proc.kill(); } catch { /* ignore */ }
+    }
+    this.workers = [];
+    this.waitQueue.length = 0;
+  }
+}
+
+let cliPool: CliWorkerPool | null = null;
+function getCliPool(): CliWorkerPool {
+  if (!cliPool) cliPool = new CliWorkerPool(getCliPath());
+  return cliPool;
+}
+
+// ──────────────────────────────────────────────���──────────────────────────────
 // IPC handlers
 // ─────────────────────────────────────────────────────────────────────────────
 
 ipcMain.handle('ag:run', async (_evt, args: string[]) => {
-  return new Promise((resolve) => {
-    const cli = getCliPath();
-    if (!fs.existsSync(cli)) {
-      resolve({ code: -1, stdout: '', stderr: `CLI not found: ${cli}` });
-      return;
-    }
-    const proc = spawn(process.execPath, [cli, ...args], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-      windowsHide: true,
-    });
-    let stdout = '';
-    let stderr = '';
-    proc.stdout.on('data', (d) => (stdout += d.toString()));
-    proc.stderr.on('data', (d) => (stderr += d.toString()));
-    proc.on('close', (code) => resolve({ code: code ?? 0, stdout, stderr }));
-    proc.on('error', (err) => resolve({ code: -1, stdout, stderr: err.message }));
-  });
+  return getCliPool().run(args);
 });
 
 ipcMain.handle('ag:info', async () => {
-  return {
-    platform: process.platform,
-    arch: process.arch,
-    versions: process.versions,
-    electron: process.versions.electron,
-    node: process.versions.node,
-    chrome: process.versions.chrome,
-    cliPath: getCliPath(),
-  };
+  return getInfoPayload();
+});
+
+ipcMain.handle('ag:config', async () => {
+  return getConfigPayload();
+});
+
+ipcMain.handle('ag:config:set-theme', async (_evt, theme: 'dark' | 'light') => {
+  try {
+    const cfgPath = getConfigPath();
+    let cfg: Record<string, unknown> = {};
+    if (fs.existsSync(cfgPath)) {
+      cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+    }
+    cfg.ui = { ...(typeof cfg.ui === 'object' && cfg.ui !== null ? cfg.ui : {}), theme };
+    fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
+    // Refresh cache so the next ag:config call returns the new theme immediately
+    configCache = cfg;
+    mainWindow?.webContents.send('ag:theme-changed', theme);
+    return true;
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.handle('ag:notify', async (_evt, title: string, body: string) => {
+  if (Notification.isSupported()) {
+    new Notification({ title, body }).show();
+  }
+});
+
+ipcMain.handle('ag:tray-status', async (_evt, status: 'ok' | 'warn' | 'err') => {
+  updateTray(status);
 });
 
 ipcMain.handle('ag:open-external', async (_evt, url: string) => {
@@ -108,7 +460,58 @@ ipcMain.handle('ag:reveal', async (_evt, p: string) => {
   shell.showItemInFolder(p);
 });
 
-// Streaming for `logs -f`
+// Antigravity lifecycle: thin wrappers around the CLI's `antigravity` subcommand.
+// The CLI returns JSON when invoked with --json, so we forward the parsed payload.
+ipcMain.handle('ag:antigravity:status', async () => {
+  const r = await getCliPool().run(['antigravity', 'status', '--json']);
+  if (r.code !== 0 && r.code !== 1) {
+    return { ok: false, error: r.stderr || r.stdout || `exit ${r.code}` };
+  }
+  try {
+    return { ok: true, data: JSON.parse(r.stdout) };
+  } catch (e) {
+    return { ok: false, error: `parse failed: ${(e as Error).message}` };
+  }
+});
+
+ipcMain.handle('ag:antigravity:version', async () => {
+  const r = await getCliPool().run(['antigravity', 'version', '--json']);
+  try {
+    return { ok: true, data: JSON.parse(r.stdout) };
+  } catch {
+    return { ok: true, data: { version: r.stdout.trim() } };
+  }
+});
+
+ipcMain.handle('ag:antigravity:launch', async () => {
+  const r = await getCliPool().run(['antigravity', 'launch', '--json']);
+  try {
+    return { ok: true, data: JSON.parse(r.stdout) };
+  } catch {
+    return { ok: true, data: { ok: r.code === 0, message: r.stdout.trim() } };
+  }
+});
+
+ipcMain.handle('ag:antigravity:kill', async () => {
+  const r = await getCliPool().run(['antigravity', 'kill', '--json']);
+  try {
+    return { ok: true, data: JSON.parse(r.stdout) };
+  } catch {
+    return { ok: true, data: { killed: 0, message: r.stdout.trim() } };
+  }
+});
+
+ipcMain.handle('ag:antigravity:restart', async () => {
+  const r = await getCliPool().run(['antigravity', 'restart', '--json']);
+  try {
+    return { ok: true, data: JSON.parse(r.stdout) };
+  } catch {
+    return { ok: true, data: { ok: r.code === 0, message: r.stdout.trim() } };
+  }
+});
+
+// Streaming for `logs -f` — uses one-shot spawn (long-lived process), with
+// chunk batching to avoid IPC flooding the renderer.
 ipcMain.handle('ag:stream:start', (evt, args: string[], streamId: string) => {
   const cli = getCliPath();
   if (!fs.existsSync(cli)) {
@@ -120,14 +523,44 @@ ipcMain.handle('ag:stream:start', (evt, args: string[], streamId: string) => {
     windowsHide: true,
   });
   activeStreams.set(streamId, proc);
-  proc.stdout.on('data', (d) => evt.sender.send(`ag:stream:${streamId}:data`, d.toString()));
-  proc.stderr.on('data', (d) => evt.sender.send(`ag:stream:${streamId}:data`, d.toString()));
+
+  // Batch chunks: flush at most every 50ms to avoid IPC storm
+  let pending: { stdout: string; stderr: string } | null = null;
+  let flushTimer: NodeJS.Timeout | null = null;
+  const flush = () => {
+    if (pending && (pending.stdout || pending.stderr)) {
+      if (!evt.sender.isDestroyed()) {
+        evt.sender.send(`ag:stream:${streamId}:data`, pending.stdout + pending.stderr);
+      }
+    }
+    pending = null;
+    flushTimer = null;
+  };
+  const schedule = () => {
+    if (!flushTimer) flushTimer = setTimeout(flush, 50);
+  };
+
+  proc.stdout?.on('data', (d: Buffer) => {
+    if (!pending) pending = { stdout: '', stderr: '' };
+    pending.stdout += d.toString();
+    schedule();
+  });
+  proc.stderr?.on('data', (d: Buffer) => {
+    if (!pending) pending = { stdout: '', stderr: '' };
+    pending.stderr += d.toString();
+    schedule();
+  });
   proc.on('close', (code) => {
-    evt.sender.send(`ag:stream:${streamId}:close`, code ?? 0);
+    flush();
+    if (!evt.sender.isDestroyed()) {
+      evt.sender.send(`ag:stream:${streamId}:close`, code ?? 0);
+    }
     activeStreams.delete(streamId);
   });
   proc.on('error', (err) => {
-    evt.sender.send(`ag:stream:${streamId}:error`, err.message);
+    if (!evt.sender.isDestroyed()) {
+      evt.sender.send(`ag:stream:${streamId}:error`, err.message);
+    }
     activeStreams.delete(streamId);
   });
   return true;
@@ -147,20 +580,35 @@ ipcMain.handle('ag:stream:cancel', (_evt, streamId: string) => {
 
 app.whenReady().then(() => {
   createWindow();
+  createTray();
+
+  // Global shortcuts
+  mainWindow?.webContents.on('before-input-event', (_e, input) => {
+    if (input.control && input.key.toLowerCase() === 'r') {
+      mainWindow?.webContents.send('ag:run-doctor');
+    } else if (input.control && input.key.toLowerCase() === 'l') {
+      mainWindow?.webContents.send('ag:navigate', 'logs');
+    } else if (input.control && input.key.toLowerCase() === 'k') {
+      mainWindow?.webContents.send('ag:command-palette');
+    } else if (input.control && input.key.toLowerCase() === ',') {
+      mainWindow?.webContents.send('ag:navigate', 'settings');
+    }
+  });
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    else mainWindow?.show();
   });
 });
 
 app.on('window-all-closed', () => {
-  // Kill any active streams
   for (const proc of activeStreams.values()) proc.kill();
   activeStreams.clear();
+  cliPool?.shutdown();
   if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('web-contents-created', (_e, contents) => {
-  // Enforce strict navigation policy
   contents.on('will-navigate', (event, url) => {
     const parsed = new URL(url);
     if (parsed.protocol !== 'file:') {

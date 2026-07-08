@@ -67,10 +67,21 @@ export function dim(msg: string): void {
   console.log(c.gray(msg));
 }
 
-export function table(rows: Array<[string, string]>): void {
-  const w1 = Math.max(...rows.map((r) => r[0].length));
-  for (const [k, v] of rows) {
-    console.log(`  ${c.bold(k.padEnd(w1))}  ${v}`);
+export function table(rows: Array<string[]>): void {
+  const widths: number[] = [];
+  for (const r of rows) {
+    r.forEach((cell, i) => {
+      widths[i] = Math.max(widths[i] ?? 0, String(cell).length);
+    });
+  }
+  for (const r of rows) {
+    const line = r
+      .map((cell, i) => {
+        const s = String(cell);
+        return i === 0 ? c.bold(s.padEnd(widths[i])) : s.padEnd(widths[i]);
+      })
+      .join('  ');
+    console.log(`  ${line}`);
   }
 }
 

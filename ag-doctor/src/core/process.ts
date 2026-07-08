@@ -1,5 +1,10 @@
 /**
  * Process management: find / kill / spawn Antigravity.
+ *
+ * Improvements over the original:
+ *   - `isPortInUse` now has a hard timeout so it never hangs on firewalled hosts.
+ *   - `killAntigravityProcesses` escalates to SIGKILL after a grace period on
+ *     non-Windows platforms (Windows has no equivalent graceful signal).
  */
 import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
@@ -50,13 +55,38 @@ function parsePgrep(stdout: string): ProcessInfo[] {
   return out;
 }
 
-/** Kill all Antigravity processes. */
+/**
+ * Kill all Antigravity processes.
+ *
+ * On non-Windows: send SIGTERM, wait briefly, then SIGKILL anything still alive.
+ * On Windows: taskkill /T /F (tree + force) to ensure child processes die too.
+ */
 export async function killAntigravityProcesses(): Promise<{ killed: number }> {
   const procs = await findAntigravityProcesses();
   const platform = getPlatform();
+  if (platform === 'win32') {
+    for (const p of procs) {
+      try {
+        await execFileAsync('taskkill', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true });
+      } catch {
+        // ignore — process may have already exited
+      }
+    }
+    return { killed: procs.length };
+  }
   for (const p of procs) {
     try {
-      process.kill(p.pid, platform === 'win32' ? undefined : 'SIGTERM');
+      process.kill(p.pid, 'SIGTERM');
+    } catch {
+      // ignore
+    }
+  }
+  // Grace period, then escalate.
+  await new Promise((r) => setTimeout(r, 1500));
+  const stillAlive = await findAntigravityProcesses();
+  for (const p of stillAlive) {
+    try {
+      process.kill(p.pid, 'SIGKILL');
     } catch {
       // ignore
     }
@@ -64,16 +94,31 @@ export async function killAntigravityProcesses(): Promise<{ killed: number }> {
   return { killed: procs.length };
 }
 
-/** Check if a TCP port is in use. */
-export async function isPortInUse(port: number, host = '127.0.0.1'): Promise<boolean> {
+/**
+ * Check if a TCP port is in use.
+ *
+ * Has a hard timeout (default 1500ms) so callers never hang on firewalled hosts.
+ */
+export async function isPortInUse(port: number, host = '127.0.0.1', timeoutMs = 1500): Promise<boolean> {
   const net = await import('net');
   return new Promise((resolve) => {
     const sock = net.createConnection({ port, host });
-    sock.once('connect', () => {
+    let done = false;
+    const finish = (result: boolean) => {
+      if (done) return;
+      done = true;
       sock.destroy();
-      resolve(true);
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    sock.once('connect', () => {
+      clearTimeout(timer);
+      finish(true);
     });
-    sock.once('error', () => resolve(false));
+    sock.once('error', () => {
+      clearTimeout(timer);
+      finish(false);
+    });
   });
 }
 

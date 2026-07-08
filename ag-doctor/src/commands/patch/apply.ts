@@ -4,6 +4,7 @@
 import type { CommandContext } from '../../types';
 import { applyPatch } from '../../core/binary-patch';
 import { killAntigravityProcesses } from '../../core/process';
+import { snapshotBefore } from '../../core/snapshot';
 import { confirm } from '../../cli/prompts';
 import { ok, error, warn, info } from '../../cli/output';
 
@@ -21,6 +22,9 @@ export async function runPatchApply(ctx: CommandContext): Promise<number> {
       return 1;
     }
   }
+  // Snapshot before mutating the binary
+  const snap = snapshotBefore('patch apply');
+  if (snap) info(`Snapshot ${snap.id} created`);
   const r = applyPatch();
   if (!r.ok) {
     error(r.message);

@@ -182,8 +182,9 @@ async function proxyToGoogle(req: http.IncomingMessage, res: http.ServerResponse
     parsedUrl.hostname = realIp;
   } catch (e) {
     log.error(`[Proxy] Could not resolve upstream IP for ${targetHost}:`, e);
-    res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: { message: 'DNS resolution failed for ' + targetHost } }));
+    if (safeWriteHead(res, 500, { 'Content-Type': 'application/json' })) {
+      safeEnd(res, JSON.stringify({ error: { message: 'DNS resolution failed for ' + targetHost } }));
+    }
     return;
   }
 
@@ -262,8 +263,8 @@ async function proxyToGoogle(req: http.IncomingMessage, res: http.ServerResponse
         const modifiedBuffer = Buffer.from(text, 'utf-8');
         modifiedHeaders['content-length'] = String(modifiedBuffer.length);
 
-        if (safeWriteHead(proxyRes.statusCode || 200, modifiedHeaders as Record<string, string>)) {
-          res.end(modifiedBuffer);
+        if (safeWriteHead(res, proxyRes.statusCode || 200, modifiedHeaders as Record<string, string>)) {
+          safeEnd(res, modifiedBuffer);
         }
       });
     } else {
@@ -406,11 +407,10 @@ function handleCustomModelRequest(
   const request = client.request(url, options, (apiRes) => {
     apiRes.on('error', (err) => {
       log.error(`[Proxy] Upstream stream error for ${model.name}:`, err.message);
-      if (!res.headersSent) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: 'Upstream connection error: ' + err.message } }));
-      } else {
-        res.end();
+      if (safeWriteHead(res, 500, { 'Content-Type': 'application/json' })) {
+        safeEnd(res, JSON.stringify({ error: { message: 'Upstream connection error: ' + err.message } }));
+      } else if (!res.writableEnded) {
+        safeEnd(res);
       }
     });
 
@@ -426,18 +426,21 @@ function handleCustomModelRequest(
             setTimeout(() => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1), 1000 * (retryCount + 1));
             return;
           }
-          res.writeHead(apiRes.statusCode!, { 'Content-Type': 'application/json' });
-          res.end(errorBody);
+          if (safeWriteHead(res, apiRes.statusCode!, { 'Content-Type': 'application/json' })) {
+            safeEnd(res, errorBody);
+          }
         });
         return;
       }
 
-      res.writeHead(200, {
+      if (!safeWriteHead(res, 200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         Connection: 'keep-alive',
         'X-Accel-Buffering': 'no',
-      });
+      })) {
+        return;
+      }
 
       let buffer = '';
       apiRes.on('data', (chunk: Buffer) => {
@@ -537,8 +540,9 @@ function handleCustomModelRequest(
         if (apiRes.statusCode! >= 400) {
           // P0-3: Only log status code and model name, NOT response body content
           log.error(`[Proxy] API error (${apiRes.statusCode}) for ${model.name}`);
-          res.writeHead(apiRes.statusCode!, { 'Content-Type': 'application/json' });
-          res.end(body);
+          if (safeWriteHead(res, apiRes.statusCode!, { 'Content-Type': 'application/json' })) {
+            safeEnd(res, body);
+          }
           return;
         }
 
@@ -565,8 +569,9 @@ function handleCustomModelRequest(
             metadata: {},
           };
 
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(cloudCodeResponse));
+          if (safeWriteHead(res, 200, { 'Content-Type': 'application/json' })) {
+            safeEnd(res, JSON.stringify(cloudCodeResponse));
+          }
         } catch (e) {
           log.error('[Proxy] Failed to map response:', e);
 
@@ -579,8 +584,9 @@ function handleCustomModelRequest(
             return;
           }
 
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: { message: 'Failed to translate model response' } }));
+          if (safeWriteHead(res, 500, { 'Content-Type': 'application/json' })) {
+            safeEnd(res, JSON.stringify({ error: { message: 'Failed to translate model response' } }));
+          }
         }
       });
     }
@@ -599,9 +605,8 @@ function handleCustomModelRequest(
       return;
     }
 
-    if (!res.headersSent) {
-      res.writeHead(504, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: { message: `Request timeout after ${REQUEST_TIMEOUT_MS / 1000}s` } }));
+    if (safeWriteHead(res, 504, { 'Content-Type': 'application/json' })) {
+      safeEnd(res, JSON.stringify({ error: { message: `Request timeout after ${REQUEST_TIMEOUT_MS / 1000}s` } }));
     }
   });
 
@@ -618,7 +623,7 @@ function handleCustomModelRequest(
     }
 
     if (isStream) {
-      if (!res.headersSent) {
+      if (!res.headersSent && !res.writableEnded) {
         const errResponse = {
           response: {
             candidates: [
@@ -634,11 +639,10 @@ function handleCustomModelRequest(
         };
         res.write('data: ' + JSON.stringify(errResponse) + '\n\n');
       }
-      res.end();
+      safeEnd(res);
     } else {
-      if (!res.headersSent) {
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: 'Custom model request failed: ' + err.message } }));
+      if (safeWriteHead(res, 502, { 'Content-Type': 'application/json' })) {
+        safeEnd(res, JSON.stringify({ error: { message: 'Custom model request failed: ' + err.message } }));
       }
     }
   });
@@ -798,8 +802,9 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
         handleGetAvailableModelsProxy(res, fullBody, lsUrl);
         return;
       }
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Missing ls parameter' }));
+      if (safeWriteHead(res, 400, { 'Content-Type': 'application/json' })) {
+        safeEnd(res, JSON.stringify({ error: 'Missing ls parameter' }));
+      }
       return;
     }
 
@@ -816,8 +821,9 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
         parsedUrl.hostname = realIp;
       } catch (e) {
         log.error(`[Proxy] Could not resolve upstream IP for ${targetHost}:`, e);
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: 'DNS resolution failed for ' + targetHost } }));
+        if (safeWriteHead(res, 500, { 'Content-Type': 'application/json' })) {
+          safeEnd(res, JSON.stringify({ error: { message: 'DNS resolution failed for ' + targetHost } }));
+        }
         return;
       }
       const fwdHeaders: Record<string, string | string[] | undefined> = {
@@ -1085,8 +1091,9 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
         parsedUrl.hostname = realIp;
       } catch (e) {
         log.error(`[Proxy] Could not resolve upstream IP for ${targetHost}:`, e);
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: 'DNS resolution failed for ' + targetHost } }));
+        if (safeWriteHead(res, 500, { 'Content-Type': 'application/json' })) {
+          safeEnd(res, JSON.stringify({ error: { message: 'DNS resolution failed for ' + targetHost } }));
+        }
         return;
       }
       const mdlHeaders: Record<string, string | string[] | undefined> = {
@@ -1268,8 +1275,9 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
           return;
         } catch (e) {
           log.error('[Proxy] JSON parse error in request body:', e);
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: { message: 'Invalid JSON request body' } }));
+          if (safeWriteHead(res, 400, { 'Content-Type': 'application/json' })) {
+            safeEnd(res, JSON.stringify({ error: { message: 'Invalid JSON request body' } }));
+          }
           return;
         }
       }

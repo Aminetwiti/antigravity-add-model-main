@@ -29,4 +29,16 @@ function copyRecursive(src, dst) {
 }
 
 copyRecursive(SRC, DST);
+
+// Copy top-level assets (icons, tray icons)
+const ASSETS_SRC = path.join(ROOT, 'assets');
+const ASSETS_DST = path.join(ROOT, 'dist', 'assets');
+if (fs.existsSync(ASSETS_SRC)) {
+  fs.mkdirSync(ASSETS_DST, { recursive: true });
+  for (const entry of fs.readdirSync(ASSETS_SRC, { withFileTypes: true })) {
+    if (!shouldCopy(entry.name)) continue;
+    fs.copyFileSync(path.join(ASSETS_SRC, entry.name), path.join(ASSETS_DST, entry.name));
+  }
+}
+
 console.log(`✓ copied assets → ${path.relative(ROOT, DST)}`);

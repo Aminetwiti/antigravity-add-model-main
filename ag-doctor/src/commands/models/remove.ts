@@ -3,6 +3,7 @@
  */
 import type { CommandContext } from '../../types';
 import { loadCustomModels, removeCustomModel } from '../../core/custom-models';
+import { snapshotBefore } from '../../core/snapshot';
 import { ok, error, warn, info } from '../../cli/output';
 import { confirm } from '../../cli/prompts';
 
@@ -23,6 +24,8 @@ export async function runModelsRemove(ctx: CommandContext, name: string): Promis
       return 1;
     }
   }
+  const snap = snapshotBefore(`models remove ${name}`);
+  if (snap) info(`Snapshot ${snap.id} created`);
   removeCustomModel(name);
   ok(`Removed ${name}`);
   return 0;

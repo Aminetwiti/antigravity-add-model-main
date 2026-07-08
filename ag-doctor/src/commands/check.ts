@@ -7,6 +7,7 @@ import { checkInstallation } from '../checks/installation';
 import { checkPatch } from '../checks/patch';
 import { checkProxy } from '../checks/proxy';
 import { checkModels } from '../checks/models';
+import { checkAntigravity } from '../checks/antigravity';
 
 export async function runCheck(ctx: CommandContext): Promise<number> {
   const results = await Promise.all([
@@ -15,6 +16,7 @@ export async function runCheck(ctx: CommandContext): Promise<number> {
     Promise.resolve(checkPatch()),
     checkProxy(),
     Promise.resolve(checkModels()),
+    checkAntigravity(),
   ]);
 
   if (ctx.json) {

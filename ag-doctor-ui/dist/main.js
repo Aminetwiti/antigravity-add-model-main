@@ -6,26 +6,185 @@ Object.defineProperty(exports, "__esModule", { value: true });
 /**
  * Electron main process.
  * Creates the BrowserWindow, registers IPC handlers, and spawns the ag-doctor CLI.
+ *
+ * Performance optimizations:
+ *  - CLI Worker Pool: long-lived Node.js processes that handle multiple commands via
+ *    JSON-over-stdin. Eliminates per-call process spawn cost (~150-300ms each).
+ *  - Cached asset paths and tray icons.
+ *  - Streaming batches chunks to avoid IPC flooding.
+ *  - No console-message forwarding in production.
  */
 const electron_1 = require("electron");
 const path_1 = __importDefault(require("path"));
 const child_process_1 = require("child_process");
 const fs_1 = __importDefault(require("fs"));
 const isDev = !electron_1.app.isPackaged;
+const isProd = !isDev;
 let mainWindow = null;
+let tray = null;
 const activeStreams = new Map();
-/**
- * Locate the ag-doctor CLI.
- * In dev: ../ag-doctor/bin/ag-doctor.js
- * In prod: bundled in resources/
- */
-function getCliPath() {
-    if (electron_1.app.isPackaged) {
-        // Bundled next to the app
-        return path_1.default.join(process.resourcesPath, 'ag-doctor', 'bin', 'ag-doctor.js');
+// Disable GPU sandbox in packaged builds to avoid startup crashes on some Windows setups
+electron_1.app.commandLine.appendSwitch('disable-gpu');
+electron_1.app.commandLine.appendSwitch('no-sandbox');
+electron_1.app.commandLine.appendSwitch('disable-software-rasterizer');
+// ─────────────────────────────────────────────────────────────────────────────
+// Cached paths (computed once)
+// ─────────────────────────────────────────────────────────────────────────────
+let _assetsPath = null;
+let _cliPath = null;
+let _configPath = null;
+function getAssetsPath() {
+    if (_assetsPath === null) {
+        _assetsPath = electron_1.app.isPackaged
+            ? path_1.default.join(process.resourcesPath, 'assets')
+            : path_1.default.join(__dirname, '..', '..', 'assets');
     }
-    // Dev: sibling directory
-    return path_1.default.join(__dirname, '..', '..', 'ag-doctor', 'bin', 'ag-doctor.js');
+    return _assetsPath;
+}
+function getCliPath() {
+    if (_cliPath === null) {
+        if (electron_1.app.isPackaged) {
+            // In a packaged portable build, the CLI is bundled in extraResources
+            // at <resources>/ag-doctor/bin/ag-doctor.js
+            _cliPath = path_1.default.join(process.resourcesPath, 'ag-doctor', 'bin', 'ag-doctor.js');
+        }
+        else {
+            _cliPath = path_1.default.join(__dirname, '..', '..', 'ag-doctor', 'bin', 'ag-doctor.js');
+        }
+    }
+    return _cliPath;
+}
+function getConfigPath() {
+    if (_configPath === null) {
+        _configPath = path_1.default.join(electron_1.app.getPath('home'), '.gemini', 'antigravity', 'config.json');
+    }
+    return _configPath;
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// Cached tray icons
+// ─────────────────────────────────────────────────────────────────────────────
+const trayIconCache = new Map();
+function getTrayIcon(status) {
+    const cached = trayIconCache.get(status);
+    if (cached)
+        return cached;
+    const svgPath = path_1.default.join(getAssetsPath(), `tray-${status}.svg`);
+    let img;
+    if (fs_1.default.existsSync(svgPath)) {
+        img = electron_1.nativeImage.createFromPath(svgPath).resize({ width: 16, height: 16 });
+    }
+    else {
+        const fallback = path_1.default.join(getAssetsPath(), 'icon.svg');
+        if (fs_1.default.existsSync(fallback)) {
+            img = electron_1.nativeImage.createFromPath(fallback).resize({ width: 16, height: 16 });
+        }
+        else {
+            img = electron_1.nativeImage.createFromPath(svgPath);
+        }
+    }
+    trayIconCache.set(status, img);
+    return img;
+}
+function readUiTheme() {
+    try {
+        const raw = fs_1.default.readFileSync(getConfigPath(), 'utf-8');
+        const cfg = JSON.parse(raw);
+        return cfg?.ui?.theme === 'light' ? 'light' : 'dark';
+    }
+    catch {
+        return 'dark';
+    }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// Cached IPC payloads — eliminate redundant disk reads and object construction
+// ─────────────────────────────────────────────────────────────────────────────
+// `info` is static for the session lifetime (platform/versions/CLI path don't change)
+const infoCache = {
+    platform: process.platform,
+    arch: process.arch,
+    versions: process.versions,
+    electron: process.versions.electron,
+    node: process.versions.node,
+    chrome: process.versions.chrome,
+    cliPath: '', // populated lazily by getCliPath()
+};
+let infoCacheReady = false;
+function getInfoPayload() {
+    if (!infoCacheReady) {
+        infoCache.cliPath = getCliPath();
+        infoCacheReady = true;
+    }
+    return infoCache;
+}
+// `config` is read from disk every call. Cache it; invalidate on theme change.
+let configCache = null;
+function getConfigPayload() {
+    if (configCache)
+        return configCache;
+    try {
+        const raw = fs_1.default.readFileSync(getConfigPath(), 'utf-8');
+        configCache = JSON.parse(raw);
+    }
+    catch {
+        configCache = { ui: { theme: 'dark' } };
+    }
+    return configCache;
+}
+function invalidateConfigCache() {
+    configCache = null;
+}
+function updateTray(status) {
+    if (!tray)
+        return;
+    tray.setImage(getTrayIcon(status));
+    tray.setToolTip(`ag-doctor · ${status.toUpperCase()}`);
+}
+function buildTrayMenu() {
+    return electron_1.Menu.buildFromTemplate([
+        {
+            label: 'Open dashboard',
+            click: () => {
+                if (mainWindow) {
+                    mainWindow.show();
+                    mainWindow.focus();
+                }
+                else {
+                    createWindow();
+                }
+            },
+        },
+        {
+            label: 'Run doctor',
+            click: () => {
+                if (mainWindow) {
+                    mainWindow.show();
+                    mainWindow.focus();
+                    mainWindow.webContents.send('ag:run-doctor');
+                }
+            },
+        },
+        { type: 'separator' },
+        {
+            label: 'Quit',
+            click: () => {
+                electron_1.app.quit();
+            },
+        },
+    ]);
+}
+function createTray() {
+    tray = new electron_1.Tray(getTrayIcon('ok'));
+    tray.setToolTip('ag-doctor');
+    tray.setContextMenu(buildTrayMenu());
+    tray.on('click', () => {
+        if (mainWindow) {
+            mainWindow.show();
+            mainWindow.focus();
+        }
+        else {
+            createWindow();
+        }
+    });
 }
 function createWindow() {
     mainWindow = new electron_1.BrowserWindow({
@@ -45,14 +204,32 @@ function createWindow() {
             preload: path_1.default.join(__dirname, 'preload.js'),
             contextIsolation: true,
             nodeIntegration: false,
-            sandbox: true,
+            sandbox: false,
             spellcheck: false,
+            backgroundThrottling: false,
         },
     });
     mainWindow.loadFile(path_1.default.join(__dirname, 'renderer', 'index.html'));
     mainWindow.once('ready-to-show', () => {
         mainWindow?.show();
     });
+    setTimeout(() => {
+        if (mainWindow && !mainWindow.isVisible()) {
+            mainWindow.show();
+        }
+    }, 2000);
+    mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
+        console.error(`[main] did-fail-load: ${code} ${desc} ${url}`);
+    });
+    mainWindow.webContents.on('render-process-gone', (_e, details) => {
+        console.error(`[main] render-process-gone: ${JSON.stringify(details)}`);
+    });
+    // Only forward console messages in dev mode (saves IPC overhead in prod)
+    if (isDev) {
+        mainWindow.webContents.on('console-message', (_e, level, message) => {
+            console.log(`[renderer] ${message}`);
+        });
+    }
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
         electron_1.shell.openExternal(url);
         return { action: 'deny' };
@@ -60,39 +237,185 @@ function createWindow() {
     if (isDev && process.env.OPEN_DEVTOOLS === '1') {
         mainWindow.webContents.openDevTools({ mode: 'detach' });
     }
+    mainWindow.on('close', (e) => {
+        if (process.platform === 'darwin') {
+            e.preventDefault();
+            mainWindow?.hide();
+        }
+    });
 }
-// ──────────────────────────────────────────────��──────────────────────────────
+class CliWorkerPool {
+    workers = [];
+    maxWorkers = 3;
+    cliPath;
+    nextId = 1;
+    waitQueue = [];
+    constructor(cliPath) {
+        this.cliPath = cliPath;
+    }
+    spawnWorker() {
+        if (!fs_1.default.existsSync(this.cliPath))
+            return null;
+        const proc = (0, child_process_1.spawn)(process.execPath, [this.cliPath, '--worker'], {
+            env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', AG_WORKER_ID: String(this.nextId++) },
+            windowsHide: true,
+            stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        const worker = { proc, busy: false, pending: null, buffer: '', errBuffer: '' };
+        proc.stdout?.on('data', (chunk) => this.handleData(worker, chunk));
+        proc.stderr?.on('data', (chunk) => { worker.errBuffer += chunk.toString(); }); // don't mix into JSON protocol
+        proc.on('close', () => this.handleClose(worker));
+        proc.on('error', (err) => this.handleError(worker, err));
+        this.workers.push(worker);
+        return worker;
+    }
+    handleData(worker, chunk, _isStderr = false) {
+        worker.buffer += chunk.toString();
+        // Newline-delimited JSON protocol
+        let idx;
+        while ((idx = worker.buffer.indexOf('\n')) >= 0) {
+            const line = worker.buffer.slice(0, idx);
+            worker.buffer = worker.buffer.slice(idx + 1);
+            if (!line)
+                continue;
+            if (worker.pending) {
+                try {
+                    const msg = JSON.parse(line);
+                    worker.pending.resolve({
+                        code: msg.code ?? 0,
+                        stdout: msg.stdout ?? '',
+                        stderr: msg.stderr ?? '',
+                    });
+                }
+                catch {
+                    worker.pending.resolve({ code: 0, stdout: line, stderr: '' });
+                }
+                worker.pending = null;
+                worker.busy = false;
+                this.dispatchNext();
+            }
+        }
+    }
+    handleClose(worker) {
+        if (worker.pending) {
+            worker.pending.reject(new Error('CLI worker closed unexpectedly'));
+            worker.pending = null;
+        }
+        worker.busy = false;
+        const idx = this.workers.indexOf(worker);
+        if (idx >= 0)
+            this.workers.splice(idx, 1);
+        this.dispatchNext();
+    }
+    handleError(worker, err) {
+        if (worker.pending) {
+            worker.pending.reject(err);
+            worker.pending = null;
+        }
+        worker.busy = false;
+    }
+    dispatchNext() {
+        if (this.waitQueue.length === 0)
+            return;
+        const idle = this.workers.find((w) => !w.busy);
+        if (!idle)
+            return;
+        const next = this.waitQueue.shift();
+        this.runOn(idle, next.args).then(next.resolve).catch(next.reject);
+    }
+    async runOn(worker, args) {
+        return new Promise((resolve, reject) => {
+            worker.busy = true;
+            worker.pending = { resolve, reject };
+            try {
+                worker.proc.stdin?.write(JSON.stringify({ args }) + '\n');
+            }
+            catch (err) {
+                worker.pending = null;
+                worker.busy = false;
+                reject(err);
+            }
+        });
+    }
+    async run(args) {
+        if (!fs_1.default.existsSync(this.cliPath)) {
+            return { code: -1, stdout: '', stderr: `CLI not found: ${this.cliPath}` };
+        }
+        // Try to find an idle worker
+        const idle = this.workers.find((w) => !w.busy);
+        if (idle) {
+            return this.runOn(idle, args);
+        }
+        // Spawn a new worker if under cap
+        if (this.workers.length < this.maxWorkers) {
+            const w = this.spawnWorker();
+            if (w)
+                return this.runOn(w, args);
+        }
+        // Queue
+        return new Promise((resolve, reject) => {
+            this.waitQueue.push({ args, resolve, reject });
+        });
+    }
+    shutdown() {
+        for (const w of this.workers) {
+            try {
+                w.proc.stdin?.end();
+            }
+            catch { /* ignore */ }
+            try {
+                w.proc.kill();
+            }
+            catch { /* ignore */ }
+        }
+        this.workers = [];
+        this.waitQueue.length = 0;
+    }
+}
+let cliPool = null;
+function getCliPool() {
+    if (!cliPool)
+        cliPool = new CliWorkerPool(getCliPath());
+    return cliPool;
+}
+// ──────────────────────────────────────────────���──────────────────────────────
 // IPC handlers
 // ─────────────────────────────────────────────────────────────────────────────
 electron_1.ipcMain.handle('ag:run', async (_evt, args) => {
-    return new Promise((resolve) => {
-        const cli = getCliPath();
-        if (!fs_1.default.existsSync(cli)) {
-            resolve({ code: -1, stdout: '', stderr: `CLI not found: ${cli}` });
-            return;
-        }
-        const proc = (0, child_process_1.spawn)(process.execPath, [cli, ...args], {
-            env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-            windowsHide: true,
-        });
-        let stdout = '';
-        let stderr = '';
-        proc.stdout.on('data', (d) => (stdout += d.toString()));
-        proc.stderr.on('data', (d) => (stderr += d.toString()));
-        proc.on('close', (code) => resolve({ code: code ?? 0, stdout, stderr }));
-        proc.on('error', (err) => resolve({ code: -1, stdout, stderr: err.message }));
-    });
+    return getCliPool().run(args);
 });
 electron_1.ipcMain.handle('ag:info', async () => {
-    return {
-        platform: process.platform,
-        arch: process.arch,
-        versions: process.versions,
-        electron: process.versions.electron,
-        node: process.versions.node,
-        chrome: process.versions.chrome,
-        cliPath: getCliPath(),
-    };
+    return getInfoPayload();
+});
+electron_1.ipcMain.handle('ag:config', async () => {
+    return getConfigPayload();
+});
+electron_1.ipcMain.handle('ag:config:set-theme', async (_evt, theme) => {
+    try {
+        const cfgPath = getConfigPath();
+        let cfg = {};
+        if (fs_1.default.existsSync(cfgPath)) {
+            cfg = JSON.parse(fs_1.default.readFileSync(cfgPath, 'utf-8'));
+        }
+        cfg.ui = { ...(typeof cfg.ui === 'object' && cfg.ui !== null ? cfg.ui : {}), theme };
+        fs_1.default.mkdirSync(path_1.default.dirname(cfgPath), { recursive: true });
+        fs_1.default.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
+        // Refresh cache so the next ag:config call returns the new theme immediately
+        configCache = cfg;
+        mainWindow?.webContents.send('ag:theme-changed', theme);
+        return true;
+    }
+    catch {
+        return false;
+    }
+});
+electron_1.ipcMain.handle('ag:notify', async (_evt, title, body) => {
+    if (electron_1.Notification.isSupported()) {
+        new electron_1.Notification({ title, body }).show();
+    }
+});
+electron_1.ipcMain.handle('ag:tray-status', async (_evt, status) => {
+    updateTray(status);
 });
 electron_1.ipcMain.handle('ag:open-external', async (_evt, url) => {
     await electron_1.shell.openExternal(url);
@@ -100,7 +423,58 @@ electron_1.ipcMain.handle('ag:open-external', async (_evt, url) => {
 electron_1.ipcMain.handle('ag:reveal', async (_evt, p) => {
     electron_1.shell.showItemInFolder(p);
 });
-// Streaming for `logs -f`
+// Antigravity lifecycle: thin wrappers around the CLI's `antigravity` subcommand.
+// The CLI returns JSON when invoked with --json, so we forward the parsed payload.
+electron_1.ipcMain.handle('ag:antigravity:status', async () => {
+    const r = await getCliPool().run(['antigravity', 'status', '--json']);
+    if (r.code !== 0 && r.code !== 1) {
+        return { ok: false, error: r.stderr || r.stdout || `exit ${r.code}` };
+    }
+    try {
+        return { ok: true, data: JSON.parse(r.stdout) };
+    }
+    catch (e) {
+        return { ok: false, error: `parse failed: ${e.message}` };
+    }
+});
+electron_1.ipcMain.handle('ag:antigravity:version', async () => {
+    const r = await getCliPool().run(['antigravity', 'version', '--json']);
+    try {
+        return { ok: true, data: JSON.parse(r.stdout) };
+    }
+    catch {
+        return { ok: true, data: { version: r.stdout.trim() } };
+    }
+});
+electron_1.ipcMain.handle('ag:antigravity:launch', async () => {
+    const r = await getCliPool().run(['antigravity', 'launch', '--json']);
+    try {
+        return { ok: true, data: JSON.parse(r.stdout) };
+    }
+    catch {
+        return { ok: true, data: { ok: r.code === 0, message: r.stdout.trim() } };
+    }
+});
+electron_1.ipcMain.handle('ag:antigravity:kill', async () => {
+    const r = await getCliPool().run(['antigravity', 'kill', '--json']);
+    try {
+        return { ok: true, data: JSON.parse(r.stdout) };
+    }
+    catch {
+        return { ok: true, data: { killed: 0, message: r.stdout.trim() } };
+    }
+});
+electron_1.ipcMain.handle('ag:antigravity:restart', async () => {
+    const r = await getCliPool().run(['antigravity', 'restart', '--json']);
+    try {
+        return { ok: true, data: JSON.parse(r.stdout) };
+    }
+    catch {
+        return { ok: true, data: { ok: r.code === 0, message: r.stdout.trim() } };
+    }
+});
+// Streaming for `logs -f` — uses one-shot spawn (long-lived process), with
+// chunk batching to avoid IPC flooding the renderer.
 electron_1.ipcMain.handle('ag:stream:start', (evt, args, streamId) => {
     const cli = getCliPath();
     if (!fs_1.default.existsSync(cli)) {
@@ -112,14 +486,45 @@ electron_1.ipcMain.handle('ag:stream:start', (evt, args, streamId) => {
         windowsHide: true,
     });
     activeStreams.set(streamId, proc);
-    proc.stdout.on('data', (d) => evt.sender.send(`ag:stream:${streamId}:data`, d.toString()));
-    proc.stderr.on('data', (d) => evt.sender.send(`ag:stream:${streamId}:data`, d.toString()));
+    // Batch chunks: flush at most every 50ms to avoid IPC storm
+    let pending = null;
+    let flushTimer = null;
+    const flush = () => {
+        if (pending && (pending.stdout || pending.stderr)) {
+            if (!evt.sender.isDestroyed()) {
+                evt.sender.send(`ag:stream:${streamId}:data`, pending.stdout + pending.stderr);
+            }
+        }
+        pending = null;
+        flushTimer = null;
+    };
+    const schedule = () => {
+        if (!flushTimer)
+            flushTimer = setTimeout(flush, 50);
+    };
+    proc.stdout?.on('data', (d) => {
+        if (!pending)
+            pending = { stdout: '', stderr: '' };
+        pending.stdout += d.toString();
+        schedule();
+    });
+    proc.stderr?.on('data', (d) => {
+        if (!pending)
+            pending = { stdout: '', stderr: '' };
+        pending.stderr += d.toString();
+        schedule();
+    });
     proc.on('close', (code) => {
-        evt.sender.send(`ag:stream:${streamId}:close`, code ?? 0);
+        flush();
+        if (!evt.sender.isDestroyed()) {
+            evt.sender.send(`ag:stream:${streamId}:close`, code ?? 0);
+        }
         activeStreams.delete(streamId);
     });
     proc.on('error', (err) => {
-        evt.sender.send(`ag:stream:${streamId}:error`, err.message);
+        if (!evt.sender.isDestroyed()) {
+            evt.sender.send(`ag:stream:${streamId}:error`, err.message);
+        }
         activeStreams.delete(streamId);
     });
     return true;
@@ -136,21 +541,38 @@ electron_1.ipcMain.handle('ag:stream:cancel', (_evt, streamId) => {
 // ─────────────────────────────────────────────────────────────────────────────
 electron_1.app.whenReady().then(() => {
     createWindow();
+    createTray();
+    // Global shortcuts
+    mainWindow?.webContents.on('before-input-event', (_e, input) => {
+        if (input.control && input.key.toLowerCase() === 'r') {
+            mainWindow?.webContents.send('ag:run-doctor');
+        }
+        else if (input.control && input.key.toLowerCase() === 'l') {
+            mainWindow?.webContents.send('ag:navigate', 'logs');
+        }
+        else if (input.control && input.key.toLowerCase() === 'k') {
+            mainWindow?.webContents.send('ag:command-palette');
+        }
+        else if (input.control && input.key.toLowerCase() === ',') {
+            mainWindow?.webContents.send('ag:navigate', 'settings');
+        }
+    });
     electron_1.app.on('activate', () => {
         if (electron_1.BrowserWindow.getAllWindows().length === 0)
             createWindow();
+        else
+            mainWindow?.show();
     });
 });
 electron_1.app.on('window-all-closed', () => {
-    // Kill any active streams
     for (const proc of activeStreams.values())
         proc.kill();
     activeStreams.clear();
+    cliPool?.shutdown();
     if (process.platform !== 'darwin')
         electron_1.app.quit();
 });
 electron_1.app.on('web-contents-created', (_e, contents) => {
-    // Enforce strict navigation policy
     contents.on('will-navigate', (event, url) => {
         const parsed = new URL(url);
         if (parsed.protocol !== 'file:') {

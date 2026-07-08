@@ -162,13 +162,7 @@ function buildSelfSignedCert(opts: {
 
   // Validity
   const now = new Date();
-  const notBefore = formatUtcTime(now);
-  const notAfter = formatUtcTime(new Date(now.getTime() + daysValid * 86400 * 1000));
-  const validity = asn1Sequence(
-    asn1UtcTime(notBefore) + asn1UtcTime(notAfter).length > 0
-      ? Buffer.concat([asn1UtcTime(notBefore), asn1UtcTime(notAfter)])
-      : Buffer.concat([asn1UtcTime(notBefore), asn1UtcTime(notAfter)]),
-  );
+  const validity = asn1Sequence(Buffer.concat([asn1UtcTime(now), asn1UtcTime(new Date(now.getTime() + daysValid * 86400 * 1000))]));
 
   // SubjectPublicKeyInfo from SPKI PEM
   const spkiDer = pemToDer(publicKeyPem);

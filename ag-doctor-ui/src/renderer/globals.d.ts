@@ -18,13 +18,28 @@ interface AgAPI {
     chrome: string;
     cliPath: string;
   }>;
+  config(): Promise<Record<string, unknown>>;
+  setTheme(theme: 'dark' | 'light'): Promise<boolean>;
+  notify(title: string, body: string): Promise<void>;
+  trayStatus(status: 'ok' | 'warn' | 'err'): Promise<void>;
   openExternal(url: string): Promise<void>;
   reveal(p: string): Promise<void>;
+  onRunDoctor(handler: () => void): () => void;
+  onNavigate(handler: (view: string) => void): () => void;
+  onCommandPalette(handler: () => void): () => void;
+  onThemeChanged(handler: (theme: 'dark' | 'light') => void): () => void;
   startStream(args: string[], streamId: string): Promise<boolean>;
   cancelStream(streamId: string): Promise<boolean>;
   onStreamData(streamId: string, handler: (chunk: string) => void): () => void;
   onStreamClose(streamId: string, handler: (code: number) => void): () => void;
   onStreamError(streamId: string, handler: (err: string) => void): () => void;
+
+  // Antigravity lifecycle
+  antigravityStatus(): Promise<{ ok: boolean; data?: unknown; error?: string }>;
+  antigravityVersion(): Promise<{ ok: boolean; data?: { version: string }; error?: string }>;
+  antigravityLaunch(): Promise<{ ok: boolean; data?: { ok: boolean; pid?: number; message: string }; error?: string }>;
+  antigravityKill(): Promise<{ ok: boolean; data?: { killed: number; message: string }; error?: string }>;
+  antigravityRestart(): Promise<{ ok: boolean; data?: { ok: boolean; message: string; pid?: number }; error?: string }>;
 }
 
 interface Window {

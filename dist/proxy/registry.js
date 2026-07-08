@@ -80,9 +80,18 @@ function loadTranslators() {
     }
     electron_log_1.default.info(`[TranslatorRegistry] ${translators.size} provider translator(s) loaded: ${[...translators.keys()].join(', ')}`);
 }
-// Providers grouped by transport compatibility
-const OPENAI_COMPAT = new Set(['openai', 'ollama', 'openrouter', 'custom', 'groq', 'mistral', 'cerebras', 'nvidia', 'opencode', 'codestral']);
-const ANTHROPIC_COMPAT = new Set(['anthropic', 'deepseek', 'kimi', 'fireworks', 'lmstudio', 'llamacpp', 'wafer', 'zai']);
+// Providers grouped by transport compatibility.
+// Source of truth: src/constants.ts (PROVIDERS + ALL_PROVIDERS).
+// To add a provider: add it to PROVIDERS in constants.ts, then place it in
+// the appropriate compat set below.
+const OPENAI_COMPAT = new Set([
+    'openai', 'ollama', 'openrouter', 'custom', 'groq', 'mistral',
+    'cerebras', 'nvidia', 'opencode', 'codestral',
+]);
+const ANTHROPIC_COMPAT = new Set([
+    'anthropic', 'deepseek', 'kimi', 'fireworks', 'lmstudio', 'llamacpp',
+    'wafer', 'zai',
+]);
 // ─── Public API ───────────────────────────────────────────────────────────
 function getTranslator(provider) {
     if (OPENAI_COMPAT.has(provider))

@@ -5,15 +5,16 @@ import path from 'path';
 import os from 'os';
 import fs from 'fs';
 import { getPlatform } from './platform';
+import { getProfilePath } from './profile';
 
 /** User data dir for the Antigravity app. */
 export function getAntigravityDataDir(): string {
   return path.join(os.homedir(), '.gemini', 'antigravity');
 }
 
-/** Path to the custom_models.json file. */
+/** Path to the custom_models.json file. Profile-aware. */
 export function getCustomModelsPath(): string {
-  return path.join(getAntigravityDataDir(), 'custom_models.json');
+  return getProfilePath('models');
 }
 
 /** Path to the active port file (if any). */

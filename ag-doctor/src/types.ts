@@ -12,6 +12,7 @@ export interface CheckResult {
   details?: string;
   fixable?: boolean;
   data?: unknown;
+  source?: 'builtin' | 'plugin';
 }
 
 export interface CustomModel {

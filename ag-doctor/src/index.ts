@@ -20,6 +20,20 @@ import { runPatchRestore } from './commands/patch/restore';
 import { runLogs } from './commands/logs';
 import { runUpdate } from './commands/update';
 import { runInfo } from './commands/info';
+import { runMitm } from './commands/mitm';
+import { runConfig } from './commands/config';
+import { runSnapshot } from './commands/snapshot';
+import { runHistory } from './commands/history';
+import { runNet } from './commands/net';
+import { runMonitor } from './commands/monitor';
+import { runCrashes } from './commands/crashes';
+import { runSelftest } from './commands/selftest';
+import { runPlugins } from './commands/plugins';
+import { runServe } from './commands/serve';
+import { runProfile } from './commands/profile';
+import { runDaemon } from './commands/daemon';
+import { runAntigravity } from './commands/antigravity';
+import { getActiveProfile, resolveActiveProfile } from './core/profile';
 
 const USAGE = `ag-doctor — Antigravity diagnostic & management CLI
 
@@ -29,17 +43,43 @@ Usage:
 Commands:
   (default)              Run full diagnostic (alias for 'doctor')
   doctor                 Full diagnostic with details
+  doctor --watch         Re-run diagnostic periodically (Ctrl+C to stop)
+  doctor --report <f>    Write a report (html/md/json) to <f>
   check                  Quick health check (exit code only)
-  repair [--yes]         Auto-fix detected issues
+  repair [--yes]         Auto-fix detected issues (snapshots first)
   models list            List configured custom models
   models add             Interactive model creation
-  models remove <name>   Delete a model
+  models remove <name>   Delete a model (snapshots first)
   models test [name]     Test connectivity for one or all models
   patch status           Show binary patch state
-  patch apply            Apply the binary patch (creates backup)
-  patch restore          Restore language_server from backup
+  patch apply            Apply the binary patch (snapshots first)
+  patch restore          Restore language_server from backup (snapshots first)
   logs [-f] [-n N]       Show language_server logs (tail/follow)
+  mitm {status|install|uninstall|proxy-on|proxy-off|export-ca}
+                         Manage MITM CA cert and system proxy
+  config {list|get|set|reset|path}
+                         Manage persistent settings
+  snapshot {list|create|restore|delete|clean}
+                         Manage timestamped backups
+  history {list|show|diff|delete|clear}
+                         View and manage past doctor runs
+  net {dns|mx|ping|mtu|trace|port}
+                         Network diagnostics
+  monitor                Live resource monitoring for Antigravity
+  crashes                Analyze Crashpad crash dumps
+  selftest               Verify the CLI itself
+  plugins {list|add|remove|enable|disable|show|path|init}
+                         Manage user-defined check plugins
+  serve [--port N] [--host H] [--token T]
+                         Start Doctor-as-a-Service HTTP server
+  profile {list|use|create|delete|show|path|copy|rename}
+                         Manage isolated configuration profiles
+  daemon {start|stop|status|run|rules|enable|disable|trigger|log|reset}
+                         Auto-recovery daemon (continuous monitoring)
+  antigravity {status|version|launch|kill|restart}
+                         Manage the Antigravity install (version, launch, close)
   update                 Re-run the parent deploy script
+  update --check         Check for newer release on GitHub (no deploy)
   info                   System & environment information
   help                   Show this help
 
@@ -49,6 +89,12 @@ Options:
   --yes, -y              Auto-confirm prompts
   --follow, -f           Follow log output (logs command)
   --lines N, -n N        Number of lines (logs command)
+  --watch, -w            Re-run diagnostic periodically (doctor command)
+  --interval <ms>        Watch interval in ms (doctor command)
+  --report <file>        Write a report to <file> (doctor command)
+  --format html|md|json  Report format (doctor command)
+  --check                Check for update (update command)
+  --profile <name>       Use a specific profile for this invocation
 
 Exit codes:
   0  OK
@@ -66,7 +112,11 @@ function buildContext(parsed: ReturnType<typeof parseArgs>): CommandContext {
   };
 }
 
-async function main(argv: string[]): Promise<number> {
+// In worker mode (called from the Electron UI's worker pool), we must NOT
+// call process.exit() — the host keeps the process alive for subsequent calls.
+const isWorker = process.env.AG_WORKER_ID !== undefined;
+
+export async function main(argv: string[]): Promise<number> {
   const parsed = parseArgs(argv);
   const ctx = buildContext(parsed);
   const [cmd, sub, ...rest] = parsed.command;
@@ -99,11 +149,46 @@ async function main(argv: string[]): Promise<number> {
         return await runLogs(ctx, {
           follow: Boolean(parsed.options.follow || parsed.options.f),
           lines: Number(parsed.options.lines || parsed.options.n) || 50,
+          source: String(parsed.options.source || 'language_server'),
         });
+      case 'mitm':
+        return await runMitm(ctx, sub);
+      case 'config':
+        return await runConfig(ctx, sub, rest);
+      case 'snapshot':
+        return await runSnapshot(ctx, sub, rest);
+      case 'history':
+        return await runHistory(ctx, sub, rest);
+      case 'net':
+        return await runNet(ctx, sub, rest);
+      case 'monitor':
+        return await runMonitor(ctx);
+      case 'crashes':
+        return await runCrashes(ctx);
+      case 'selftest':
+        return await runSelftest(ctx);
+      case 'plugins':
+        return await runPlugins(ctx, sub, rest);
+      case 'serve': {
+        // Re-parse args to get options after the 'serve' subcommand
+        const serveIdx = process.argv.indexOf('serve');
+        const serveArgs = serveIdx >= 0 ? process.argv.slice(serveIdx + 1) : rest;
+        return await runServe(ctx, serveArgs);
+      }
+      case 'profile':
+        return await runProfile(ctx, sub, rest);
+      case 'daemon': {
+        // Re-parse args to get options after the 'daemon' subcommand
+        const daemonIdx = process.argv.indexOf('daemon');
+        const daemonArgs = daemonIdx >= 0 ? process.argv.slice(daemonIdx + 1) : [sub, ...rest].filter(Boolean) as string[];
+        return await runDaemon(ctx, daemonArgs);
+      }
       case 'update':
         return await runUpdate(ctx);
       case 'info':
         return runInfo(ctx);
+      case 'antigravity':
+        return await runAntigravity(ctx, [sub, ...rest], rest);
       case 'help':
       case '--help':
       case '-h':
@@ -127,10 +212,22 @@ async function main(argv: string[]): Promise<number> {
   }
 }
 
-main(process.argv.slice(2)).then(
-  (code) => process.exit(code),
-  (err) => {
-    console.error(c.red('Fatal:'), err);
-    process.exit(2);
-  },
-);
+// Export `run` as an alias for the worker shim (and for direct programmatic use).
+export const run = main;
+
+// Auto-execute only when invoked as a script (not when imported as a module).
+// The compiled `dist/index.js` is `require()`d by the worker shim, so we must
+// not auto-run in that case. In CommonJS, `require.main === module` is true
+// only when the file is the entry point of the process.
+const isMainModule =
+  typeof require !== 'undefined' && require.main === module;
+
+if (isMainModule && !isWorker) {
+  main(process.argv.slice(2)).then(
+    (code) => process.exit(code),
+    (err) => {
+      console.error(c.red('Fatal:'), err);
+      process.exit(2);
+    },
+  );
+}

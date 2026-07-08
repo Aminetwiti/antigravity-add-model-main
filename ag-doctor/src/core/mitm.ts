@@ -11,8 +11,8 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import { getPlatform } from './platform';
-import { ensureCa, readCa, getCaCertPath } from './cert';
-import { probe } from './probe';
+import { ensureCa, readCa, getCaCertPath, CA_NAME } from './cert';
+import { probeWithProxy } from './probe';
 
 const execFileAsync = promisify(execFile);
 
@@ -30,6 +30,22 @@ export interface MitmStatus {
   interceptionError: string | null;
   platform: string;
   details: string[];
+  // Nested structure expected by the Electron UI
+  ca: {
+    generated: boolean;
+    path: string | null;
+    fingerprint: string | null;
+    installed: boolean;
+  };
+  proxy: {
+    host: string | null;
+    port: number | null;
+    redirected: boolean;
+  };
+  interception: {
+    listening: boolean;
+    reachable: boolean;
+  };
 }
 
 /** Full status report for `ag-doctor mitm status`. */
@@ -71,7 +87,11 @@ export async function getMitmStatus(port = DEFAULT_MITM_PORT): Promise<MitmStatu
   let interceptionError: string | null = null;
   if (caInstalled && proxyEnabled) {
     try {
-      const r = await probe(`https://daily-cloudcode-pa.googleapis.com/v1internal:ping`, 5000, `http://${proxyHost}:${proxyPort}`);
+      const r = await probeWithProxy(
+        `https://daily-cloudcode-pa.googleapis.com/v1internal:ping`,
+        5000,
+        `http://${proxyHost}:${proxyPort}`,
+      );
       interceptionOk = r.ok;
       interceptionError = r.error ?? null;
       details.push(`Interception test: ${r.ok ? `OK (${r.latencyMs}ms)` : `FAILED — ${r.error}`}`);
@@ -93,6 +113,22 @@ export async function getMitmStatus(port = DEFAULT_MITM_PORT): Promise<MitmStatu
     interceptionError,
     platform,
     details,
+    // Nested structure expected by the Electron UI
+    ca: {
+      generated: !!ca,
+      path: ca?.certPath ?? null,
+      fingerprint: ca?.fingerprint ?? null,
+      installed: caInstalled,
+    },
+    proxy: {
+      host: proxyHost,
+      port: proxyPort,
+      redirected: proxyEnabled,
+    },
+    interception: {
+      listening: proxyEnabled,
+      reachable: interceptionOk === true,
+    },
   };
 }
 
@@ -102,7 +138,26 @@ export async function installCaCert(): Promise<{ ok: boolean; message: string }>
   const platform = getPlatform();
   try {
     if (platform === 'win32') {
-      await execFileAsync('certutil', ['-addstore', '-f', 'ROOT', ca.certPath], { windowsHide: true });
+      try {
+        await execFileAsync('certutil', ['-addstore', '-f', 'ROOT', ca.certPath], { windowsHide: true });
+      } catch (e) {
+        const err = e as Error & { stderr?: string; stdout?: string };
+        const stderr = err.stderr ?? err.stdout ?? '';
+        // Detect common admin-elevation issues
+        if (/access is denied/i.test(stderr) || /0x80070005/i.test(stderr)) {
+          return {
+            ok: false,
+            message: `Failed to install CA: access denied. Run from an elevated (Administrator) PowerShell.`,
+          };
+        }
+        if (/cannot find the file/i.test(stderr) || (/not found/i.test(stderr) && /certutil/i.test(stderr))) {
+          return {
+            ok: false,
+            message: `Failed to install CA: certutil.exe not found in PATH.`,
+          };
+        }
+        return { ok: false, message: `Failed to install CA: ${stderr.trim() || err.message}` };
+      }
     } else if (platform === 'darwin') {
       await execFileAsync('sudo', [
         'security',
@@ -219,10 +274,14 @@ export async function getSystemProxy(): Promise<{ enabled: boolean; host: string
   try {
     if (platform === 'win32') {
       const { stdout } = await execFileAsync('netsh', ['winhttp', 'show', 'proxy'], { windowsHide: true });
-      const m = stdout.match(/Proxy Server\(s\)\s*:\s*([^\s]+)/);
-      if (m && m[1] !== 'Direct access (no proxy server).') {
-        const [host, portStr] = m[1].split(':');
-        return { enabled: true, host, port: parseInt(portStr, 10) };
+      // Match a host:port anywhere in the output. The label before the colon
+      // is locale-dependent ("Proxy Server(s)" in English, "Serveur(s) proxy"
+      // in French, etc.), so we only rely on the host:port pattern itself.
+      // The address must contain a dot (e.g., 127.0.0.1) or be a hostname,
+      // and have a port number after the colon.
+      const m = stdout.match(/\b((?:\d{1,3}\.){3}\d{1,3}|[A-Za-z0-9.-]+):(\d{2,5})\b/);
+      if (m) {
+        return { enabled: true, host: m[1], port: parseInt(m[2], 10) };
       }
       return { enabled: false, host: null, port: null };
     }
@@ -253,16 +312,50 @@ export async function getSystemProxy(): Promise<{ enabled: boolean; host: string
   }
 }
 
-/** Check if a CA with the given fingerprint is installed in the OS trust store. */
+/** Check if a CA with the given fingerprint is installed in the OS trust store.
+ *
+ * On Windows, the check is two-tier:
+ *   1. Try to find the exact thumbprint (fast path, matches the CLI's own CA).
+ *   2. Fall back to searching for any cert whose Subject matches CA_NAME
+ *      ("Antigravity MITM CA"). This handles CAs generated by other tools
+ *      (e.g., the manual PowerShell forwarder) that share the Subject but
+ *      have a different thumbprint.
+ */
 export async function isCaInstalled(fingerprint: string): Promise<boolean> {
   const platform = getPlatform();
   const caCertPath = getCaCertPath();
   try {
     if (platform === 'win32') {
-      // certutil -verifystore ROOT <thumbprint> exits 0 if found
       const thumbprint = fingerprint.replace(/:/g, '').toLowerCase();
-      await execFileAsync('certutil', ['-verifystore', 'ROOT', thumbprint], { windowsHide: true });
-      return true;
+      try {
+        // Tier 1: exact thumbprint match
+        const { stdout } = await execFileAsync(
+          'cmd',
+          ['/c', `certutil -verifystore ROOT ${thumbprint}`],
+          { windowsHide: true },
+        );
+        if (stdout.includes(thumbprint.toUpperCase())) return true;
+      } catch {
+        // Tier 1 failed — fall through to Tier 2
+      }
+      // Tier 2: enumerate ROOT store via PowerShell and look for Subject Name.
+      // certutil -store ROOT "<name>" is unreliable when called via cmd /c with
+      // quoted arguments, so we use PowerShell's certificate drive instead.
+      try {
+        const psScript =
+          `Get-ChildItem Cert:\\LocalMachine\\Root,Cert:\\CurrentUser\\Root -ErrorAction SilentlyContinue ` +
+          `| Where-Object { $_.Subject -like '*${CA_NAME}*' } ` +
+          `| Select-Object -ExpandProperty Thumbprint`;
+        const { stdout } = await execFileAsync(
+          'powershell',
+          ['-NoProfile', '-Command', psScript],
+          { windowsHide: true },
+        );
+        // If PowerShell returned any thumbprint, the CA is installed.
+        return stdout.trim().length > 0;
+      } catch {
+        return false;
+      }
     }
     if (platform === 'darwin') {
       const { stdout } = await execFileAsync('security', ['find-certificate', '-a', '-c', CA_NAME, '/Library/Keychains/System.keychain']);

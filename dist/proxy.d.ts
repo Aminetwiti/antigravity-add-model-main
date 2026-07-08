@@ -1,22 +1,11 @@
+import type { CustomModel, GeminiRequestBody, GeminiCandidate, CloudCodeResponse } from './proxy/types';
+export type { CustomModel, GeminiRequestBody, GeminiCandidate, CloudCodeResponse };
+export { generateModelPlaceholderId, toSlug } from './proxy/idGenerator';
 /**
- * Antigravity Local Proxy Server.
- * Routes requests to Google, OpenAI, Anthropic, Ollama, and custom provider endpoints.
- * Intercepts model lists to inject user-defined custom models.
+ * Parses the Retry-After header from upstream responses (RFC 7231 §7.1.3).
+ * Returns delay in milliseconds, or 0 if no valid header is present.
  */
-export interface CustomModel {
-    name: string;
-    displayName: string;
-    description: string;
-    provider: string;
-    apiKey: string;
-    apiUrl: string;
-    externalModelName: string;
-    allowUnauthorized?: boolean;
-    encrypted?: boolean;
-    _slug?: string;
-    timeout?: number;
-    maxRetries?: number;
-}
+export declare function parseRetryAfter(headers: Record<string, string | string[] | undefined>): number;
 export declare function startProxy(): Promise<number>;
 export declare function stopProxy(): Promise<void>;
 export declare function getProxyPort(): number;

@@ -4,6 +4,14 @@
  * Note: this module only handles the plaintext JSON representation.
  * Encryption is handled by the running Electron app via safeStorage.
  * For CLI inspection / migration purposes we read/write the file as-is.
+ *
+ * Improvements over the original:
+ *   - `loadCustomModels` no longer throws on corrupt JSON — returns an empty
+ *     file and logs a warning instead.
+ *   - `looksEncrypted` uses a broader set of known key prefixes (was: only
+ *     `sk-` and `AIza`, which missed Google, Groq, Mistral, etc.).
+ *   - `validateCustomModels` now allows `apiKey` to be optional for providers
+ *     that don't require authentication (e.g. Ollama, LM Studio).
  */
 import fs from 'fs';
 import path from 'path';
@@ -32,17 +40,38 @@ const KNOWN_PROVIDERS = new Set([
   'zai',
 ]);
 
+// Providers that don't require an API key (local servers, etc.)
+const KEYLESS_PROVIDERS = new Set(['ollama', 'lmstudio', 'llamacpp']);
+
+// Known plaintext API-key prefixes. Anything else is treated as encrypted
+// (opaque blob produced by Electron's safeStorage).
+const KNOWN_KEY_PREFIXES = [
+  'sk-',         // OpenAI, OpenRouter, DeepSeek, Groq, Mistral, Cerebras, Fireworks, Kimi, Z.ai
+  'AIza',        // Google AI Studio
+  'gsk_',        // Groq (newer)
+  'nvapi-',      // NVIDIA NIM
+  'fk-',         // Fireworks (alt)
+  'wafer-',      // Wafer
+  'ant-',        // Anthropic (newer)
+];
+
 export function loadCustomModels(filePath?: string): CustomModelsFile {
   const fp = filePath ?? getCustomModelsPath();
   if (!fs.existsSync(fp)) {
     return { models: [] };
   }
-  const raw = fs.readFileSync(fp, 'utf-8').replace(/^\uFEFF/, '');
-  const parsed = JSON.parse(raw);
-  if (!parsed || !Array.isArray(parsed.models)) {
+  try {
+    const raw = fs.readFileSync(fp, 'utf-8').replace(/^\uFEFF/, '');
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.models)) {
+      return { models: [] };
+    }
+    return { models: parsed.models as CustomModel[] };
+  } catch (e) {
+    // Corrupt JSON should not crash the CLI — log and return empty.
+    console.warn(`[custom-models] failed to parse ${fp}: ${(e as Error).message}`);
     return { models: [] };
   }
-  return { models: parsed.models as CustomModel[] };
 }
 
 export function saveCustomModels(
@@ -73,14 +102,22 @@ export function removeCustomModel(name: string, filePath?: string): CustomModels
   return file;
 }
 
-/** Heuristic: detect if the file contains encrypted API keys (opaque strings). */
+/**
+ * Heuristic: detect if the file contains encrypted API keys (opaque strings).
+ *
+ * A key is considered "encrypted" if it's non-empty AND doesn't match any
+ * known plaintext prefix. This catches safeStorage-encrypted blobs (which are
+ * base64 with no recognizable prefix) without false-positives on legitimate
+ * keys from any supported provider.
+ */
 export function looksEncrypted(filePath?: string): boolean {
   const fp = filePath ?? getCustomModelsPath();
   if (!fs.existsSync(fp)) return false;
   const file = loadCustomModels(fp);
-  return file.models.some(
-    (m) => typeof m.apiKey === 'string' && m.apiKey.length > 0 && !m.apiKey.startsWith('sk-') && !m.apiKey.startsWith('AIza'),
-  );
+  return file.models.some((m) => {
+    if (typeof m.apiKey !== 'string' || m.apiKey.length === 0) return false;
+    return !KNOWN_KEY_PREFIXES.some((p) => m.apiKey!.startsWith(p));
+  });
 }
 
 export interface ValidationIssue {
@@ -111,6 +148,10 @@ export function validateCustomModels(file: CustomModelsFile): ValidationIssue[] 
     }
     if (!m.externalModelName) {
       issues.push({ model: m.name, field: 'externalModelName', message: 'is required' });
+    }
+    // API key is required unless the provider is keyless (Ollama, LM Studio, etc.)
+    if (!m.apiKey && m.provider && !KEYLESS_PROVIDERS.has(m.provider)) {
+      issues.push({ model: m.name, field: 'apiKey', message: 'is required for this provider' });
     }
   }
   return issues;

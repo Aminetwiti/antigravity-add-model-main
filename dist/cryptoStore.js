@@ -39,8 +39,7 @@ exports.encryptString = encryptString;
 exports.decryptString = decryptString;
 exports.encryptModels = encryptModels;
 exports.decryptModels = decryptModels;
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { safeStorage } = require('electron');
+const electron_1 = require("electron");
 const fs = __importStar(require("fs"));
 /**
  * Creates a backup of the specified file with a .bak extension.
@@ -62,7 +61,7 @@ function backupFile(filePath) {
  */
 function isEncryptionAvailable() {
     try {
-        return !!(safeStorage && safeStorage.isEncryptionAvailable());
+        return !!(electron_1.safeStorage && electron_1.safeStorage.isEncryptionAvailable());
     }
     catch (_e) {
         return false;
@@ -76,7 +75,7 @@ function encryptString(plainText) {
         return plainText;
     if (isEncryptionAvailable()) {
         try {
-            const buffer = safeStorage.encryptString(plainText);
+            const buffer = electron_1.safeStorage.encryptString(plainText);
             return 'enc:' + buffer.toString('base64');
         }
         catch (err) {
@@ -100,7 +99,7 @@ function decryptString(encryptedText) {
         if (isEncryptionAvailable()) {
             try {
                 const buffer = Buffer.from(base64Data, 'base64');
-                return safeStorage.decryptString(buffer);
+                return electron_1.safeStorage.decryptString(buffer);
             }
             catch (err) {
                 console.error('[CryptoStore] safeStorage decryption failed:', err);
