@@ -30,3 +30,5 @@ logs/*.txt
 archive/
 .kimchi/*
 ag-doctor/dist/*
+ag-doctor-ui/dist/*
+ag-doctor-ui/release/*

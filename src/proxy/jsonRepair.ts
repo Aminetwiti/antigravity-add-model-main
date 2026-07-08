@@ -66,12 +66,12 @@ export function repairPartialJson(input: string | null | undefined): unknown {
   const lastOpen = stripped.lastIndexOf('[');
   const lastClose = stripped.lastIndexOf(']');
   if (lastOpen > lastClose) {
-    candidates.push(stripped.slice(0, lastOpen) + ']');
+    candidates.push(stripped + ']');
   }
   const lastOpenBrace = stripped.lastIndexOf('{');
   const lastCloseBrace = stripped.lastIndexOf('}');
   if (lastOpenBrace > lastCloseBrace) {
-    candidates.push(stripped.slice(0, lastOpenBrace) + '}');
+    candidates.push(stripped + '}');
   }
 
   for (const candidate of candidates) {

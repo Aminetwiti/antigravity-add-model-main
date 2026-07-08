@@ -44,22 +44,45 @@ const DEFAULT_URLS: Record<string, string> = {
 export async function runModelsAdd(ctx: CommandContext): Promise<number> {
   if (!ctx.json) header('Add custom model');
 
-  const provider = await ask(`Provider [${PROVIDERS.join('|')}]: `, 'custom');
+  const options = ctx.options || {};
+
+  let provider = options.provider as string | undefined;
+  if (!provider) {
+    provider = await ask(`Provider [${PROVIDERS.join('|')}]: `, 'custom');
+  }
   if (!PROVIDERS.includes(provider as (typeof PROVIDERS)[number])) {
     error(`Unknown provider: ${provider}`);
     return 2;
   }
 
-  const name = await ask('Model ID (e.g. models/my-model): ', '');
+  let name = options.name as string | undefined;
+  if (!name) {
+    name = await ask('Model ID (e.g. models/my-model): ', '');
+  }
   if (!name.startsWith('models/')) {
     error('Model ID must start with "models/"');
     return 2;
   }
 
-  const externalModelName = await ask('External model name: ', name.replace(/^models\//, ''));
-  const apiUrl = await ask(`API URL [${DEFAULT_URLS[provider] ?? ''}]: `, DEFAULT_URLS[provider] ?? '');
-  const apiKey = await askSecret('API key (leave empty for local): ');
-  const displayName = await ask('Display name (optional): ', name);
+  let externalModelName = options.external as string ?? options['external-name'] as string ?? undefined;
+  if (!externalModelName) {
+    externalModelName = await ask('External model name: ', name.replace(/^models\//, ''));
+  }
+
+  let apiUrl = options.url as string ?? options['api-url'] as string ?? undefined;
+  if (!apiUrl) {
+    apiUrl = await ask(`API URL [${DEFAULT_URLS[provider] ?? ''}]: `, DEFAULT_URLS[provider] ?? '');
+  }
+
+  let apiKey = options.key as string ?? options['api-key'] as string ?? undefined;
+  if (apiKey === undefined) {
+    apiKey = await askSecret('API key (leave empty for local): ');
+  }
+
+  let displayName = options.display as string ?? options['display-name'] as string ?? undefined;
+  if (!displayName) {
+    displayName = await ask('Display name (optional): ', name);
+  }
 
   const model: CustomModel = {
     name,
@@ -80,7 +103,7 @@ export async function runModelsAdd(ctx: CommandContext): Promise<number> {
 
   const existing = loadCustomModels();
   if (existing.models.some((m) => m.name === name)) {
-    const overwrite = await confirm(`Model "${name}" already exists. Overwrite?`, false);
+    const overwrite = ctx.yes || await confirm(`Model "${name}" already exists. Overwrite?`, false);
     if (!overwrite) {
       info('Aborted');
       return 1;

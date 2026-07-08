@@ -62,6 +62,7 @@ function buildContext(parsed: ReturnType<typeof parseArgs>): CommandContext {
     verbose: Boolean(parsed.options.verbose || parsed.options.v),
     yes: Boolean(parsed.options.yes || parsed.options.y),
     cwd: process.cwd(),
+    options: parsed.options,
   };
 }
 

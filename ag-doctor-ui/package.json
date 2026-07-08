@@ -4,7 +4,7 @@
   "description": "Premium Electron UI for the ag-doctor CLI",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/copy-assets.js && tsc -p tsconfig.json",
     "watch": "tsc -p tsconfig.json --watch",
     "start": "npm run build && electron .",
     "dev": "tsc -p tsconfig.json --watch & electron .",
