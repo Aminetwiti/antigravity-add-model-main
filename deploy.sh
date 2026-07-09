@@ -1,20 +1,33 @@
 #!/bin/bash
-# Script de déploiement automatisé pour Linux
-# Génère les dossiers de distribution pour ag-doctor-ui
+# Script de déploiement pour le serveur Linux
+# Ce script automatise la compilation et le redémarrage des services.
 
-echo "Démarrage de la génération du build pour le déploiement..."
-cd ag-doctor-ui || exit 1
+set -e
 
-echo "Installation des dépendances et compilation de l'interface..."
-npm run dist:dir
+echo "🚀 Début du déploiement sur le serveur Linux..."
 
-if [ $? -eq 0 ]; then
-    echo "=============================================="
-    echo "Succès ! Le build a été généré dans ag-doctor-ui/release/"
-    echo "=============================================="
-else
-    echo "=============================================="
-    echo "Erreur lors de la génération du build."
-    echo "=============================================="
-    exit 1
-fi
+# 1. Aller dans le dossier du projet
+cd "$(dirname "$0")"
+
+# 2. Stopper les processus existants
+echo "🛑 Arrêt des services Antigravity existants..."
+pkill -f "Antigravity" || true
+pkill -f "language_server" || true
+sleep 2
+
+# 3. Installer les dépendances et compiler le core
+echo "📦 Compilation de ag-doctor..."
+cd ag-doctor
+npm install
+npm run build
+cd ..
+
+# 4. Installer les dépendances et compiler l'UI
+echo "🎨 Compilation de ag-doctor-ui..."
+cd ag-doctor-ui
+npm install
+npm run build
+cd ..
+
+# 5. Redémarrer les services
+echo "✅ Déploiement terminé avec succès. Vous pouvez maintenant relancer le binaire ou l'application."

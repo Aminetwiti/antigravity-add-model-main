@@ -56,6 +56,22 @@ export function ensureCa(): CaFiles {
 
   if (!fs.existsSync(keyPath) || !fs.existsSync(certPath)) {
     generateCa(keyPath, certPath, fingerprintPath);
+  } else {
+    // Check if the existing cert is expired
+    try {
+      const pem = fs.readFileSync(certPath, 'utf8');
+      const x509 = new crypto.X509Certificate(pem);
+      const isExpired = new Date(x509.validTo).getTime() < Date.now();
+      if (isExpired) {
+        console.log('[MITM] CA Certificate has expired. Regenerating...');
+        fs.unlinkSync(keyPath);
+        fs.unlinkSync(certPath);
+        if (fs.existsSync(fingerprintPath)) fs.unlinkSync(fingerprintPath);
+        generateCa(keyPath, certPath, fingerprintPath);
+      }
+    } catch (e) {
+      // Ignore X509 parse errors, we will fallback
+    }
   }
 
   const fingerprint = fs.existsSync(fingerprintPath)

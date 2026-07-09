@@ -23,6 +23,25 @@ const isProd = !isDev;
 let mainWindow = null;
 let tray = null;
 const activeStreams = new Map();
+// ─────────────────────────────────────────────────────────────────────────────
+// F-28 FIX — Single-instance lock: prevents two ag-doctor-ui windows from
+// running simultaneously (which causes CliWorkerPool race conditions).
+// ─────────────────────────────────────────────────────────────────────────────
+const gotLock = electron_1.app.requestSingleInstanceLock();
+if (!gotLock) {
+    // Another instance is already running — focus it and quit this one.
+    electron_1.app.quit();
+}
+else {
+    electron_1.app.on('second-instance', () => {
+        if (mainWindow) {
+            if (mainWindow.isMinimized())
+                mainWindow.restore();
+            mainWindow.show();
+            mainWindow.focus();
+        }
+    });
+}
 // Disable GPU sandbox in packaged builds to avoid startup crashes on some Windows setups
 electron_1.app.commandLine.appendSwitch('disable-gpu');
 electron_1.app.commandLine.appendSwitch('no-sandbox');
@@ -244,6 +263,9 @@ function createWindow() {
         }
     });
 }
+// IPC command timeout — renderer-side should also have a fallback, but this
+// ensures no promise leaks even if the renderer is destroyed.
+const WORKER_CMD_TIMEOUT_MS = 15_000;
 class CliWorkerPool {
     workers = [];
     maxWorkers = 3;
@@ -263,13 +285,20 @@ class CliWorkerPool {
         });
         const worker = { proc, busy: false, pending: null, buffer: '', errBuffer: '' };
         proc.stdout?.on('data', (chunk) => this.handleData(worker, chunk));
-        proc.stderr?.on('data', (chunk) => { worker.errBuffer += chunk.toString(); }); // don't mix into JSON protocol
+        // F-03/F-15: stderr goes to errBuffer only — never mixed into JSON protocol
+        proc.stderr?.on('data', (chunk) => {
+            worker.errBuffer += chunk.toString();
+            // Surface non-empty stderr in development so silent crashes are visible
+            if (isDev && worker.errBuffer.trim()) {
+                console.warn(`[pool:worker-${worker.proc.pid}] stderr:`, worker.errBuffer.slice(-500));
+            }
+        });
         proc.on('close', () => this.handleClose(worker));
         proc.on('error', (err) => this.handleError(worker, err));
         this.workers.push(worker);
         return worker;
     }
-    handleData(worker, chunk, _isStderr = false) {
+    handleData(worker, chunk) {
         worker.buffer += chunk.toString();
         // Newline-delimited JSON protocol
         let idx;
@@ -305,6 +334,18 @@ class CliWorkerPool {
         const idx = this.workers.indexOf(worker);
         if (idx >= 0)
             this.workers.splice(idx, 1);
+        // F-14 FIX: if there are queued commands but no live workers left and we
+        // can't spawn more (e.g. cliPath gone), drain the queue with rejections
+        // so no promise hangs indefinitely.
+        if (this.waitQueue.length > 0 && this.workers.length === 0 && !fs_1.default.existsSync(this.cliPath)) {
+            const err = new Error('CLI worker pool exhausted — no workers available');
+            for (const item of this.waitQueue) {
+                clearTimeout(item.timer);
+                item.reject(err);
+            }
+            this.waitQueue.length = 0;
+            return;
+        }
         this.dispatchNext();
     }
     handleError(worker, err) {
@@ -318,19 +359,48 @@ class CliWorkerPool {
         if (this.waitQueue.length === 0)
             return;
         const idle = this.workers.find((w) => !w.busy);
-        if (!idle)
+        if (!idle) {
+            // F-14 FIX: try to spawn a new worker for the queued item
+            if (this.workers.length < this.maxWorkers) {
+                const w = this.spawnWorker();
+                if (w) {
+                    const next = this.waitQueue.shift();
+                    clearTimeout(next.timer);
+                    this.runOn(w, next.args).then(next.resolve).catch(next.reject);
+                }
+            }
             return;
+        }
         const next = this.waitQueue.shift();
+        clearTimeout(next.timer);
         this.runOn(idle, next.args).then(next.resolve).catch(next.reject);
     }
     async runOn(worker, args) {
         return new Promise((resolve, reject) => {
             worker.busy = true;
-            worker.pending = { resolve, reject };
+            // F-14 FIX: per-command timeout — if worker stops responding (hung/zombie)
+            // the promise still resolves within WORKER_CMD_TIMEOUT_MS milliseconds.
+            const timer = setTimeout(() => {
+                if (worker.pending) {
+                    worker.pending = null;
+                    worker.busy = false;
+                    // Kill the stuck worker so handleClose can respawn
+                    try {
+                        worker.proc.kill();
+                    }
+                    catch { /* ignore */ }
+                    reject(new Error(`CLI worker timed out after ${WORKER_CMD_TIMEOUT_MS / 1000}s running: ${args.join(' ')}`));
+                }
+            }, WORKER_CMD_TIMEOUT_MS);
+            worker.pending = {
+                resolve: (val) => { clearTimeout(timer); resolve(val); },
+                reject: (err) => { clearTimeout(timer); reject(err); },
+            };
             try {
                 worker.proc.stdin?.write(JSON.stringify({ args }) + '\n');
             }
             catch (err) {
+                clearTimeout(timer);
                 worker.pending = null;
                 worker.busy = false;
                 reject(err);
@@ -343,21 +413,33 @@ class CliWorkerPool {
         }
         // Try to find an idle worker
         const idle = this.workers.find((w) => !w.busy);
-        if (idle) {
+        if (idle)
             return this.runOn(idle, args);
-        }
         // Spawn a new worker if under cap
         if (this.workers.length < this.maxWorkers) {
             const w = this.spawnWorker();
             if (w)
                 return this.runOn(w, args);
         }
-        // Queue
+        // F-14 FIX: queue the command with a hard timeout so it never hangs forever
         return new Promise((resolve, reject) => {
-            this.waitQueue.push({ args, resolve, reject });
+            const timer = setTimeout(() => {
+                const idx = this.waitQueue.findIndex((q) => q.timer === timer);
+                if (idx >= 0)
+                    this.waitQueue.splice(idx, 1);
+                reject(new Error(`CLI command timed out in queue after ${WORKER_CMD_TIMEOUT_MS / 1000}s: ${args.join(' ')}`));
+            }, WORKER_CMD_TIMEOUT_MS);
+            this.waitQueue.push({ args, resolve, reject, timer });
         });
     }
     shutdown() {
+        // F-14 FIX: drain queue with rejections before killing workers
+        const shutdownErr = new Error('Worker pool is shutting down');
+        for (const item of this.waitQueue) {
+            clearTimeout(item.timer);
+            item.reject(shutdownErr);
+        }
+        this.waitQueue.length = 0;
         for (const w of this.workers) {
             try {
                 w.proc.stdin?.end();
@@ -369,7 +451,6 @@ class CliWorkerPool {
             catch { /* ignore */ }
         }
         this.workers = [];
-        this.waitQueue.length = 0;
     }
 }
 let cliPool = null;
@@ -656,31 +737,34 @@ electron_1.ipcMain.handle('ag:stream:cancel', (_evt, streamId) => {
     return false;
 });
 // ─────────────────────────────────────────────────────────────────────────────
-electron_1.app.whenReady().then(() => {
-    createWindow();
-    createTray();
-    // Global shortcuts
-    mainWindow?.webContents.on('before-input-event', (_e, input) => {
-        if (input.control && input.key.toLowerCase() === 'r') {
-            mainWindow?.webContents.send('ag:run-doctor');
-        }
-        else if (input.control && input.key.toLowerCase() === 'l') {
-            mainWindow?.webContents.send('ag:navigate', 'logs');
-        }
-        else if (input.control && input.key.toLowerCase() === 'k') {
-            mainWindow?.webContents.send('ag:command-palette');
-        }
-        else if (input.control && input.key.toLowerCase() === ',') {
-            mainWindow?.webContents.send('ag:navigate', 'settings');
-        }
+// F-28: only proceed if we own the single-instance lock
+if (gotLock) {
+    electron_1.app.whenReady().then(() => {
+        createWindow();
+        createTray();
+        // Global shortcuts
+        mainWindow?.webContents.on('before-input-event', (_e, input) => {
+            if (input.control && input.key.toLowerCase() === 'r') {
+                mainWindow?.webContents.send('ag:run-doctor');
+            }
+            else if (input.control && input.key.toLowerCase() === 'l') {
+                mainWindow?.webContents.send('ag:navigate', 'logs');
+            }
+            else if (input.control && input.key.toLowerCase() === 'k') {
+                mainWindow?.webContents.send('ag:command-palette');
+            }
+            else if (input.control && input.key.toLowerCase() === ',') {
+                mainWindow?.webContents.send('ag:navigate', 'settings');
+            }
+        });
+        electron_1.app.on('activate', () => {
+            if (electron_1.BrowserWindow.getAllWindows().length === 0)
+                createWindow();
+            else
+                mainWindow?.show();
+        });
     });
-    electron_1.app.on('activate', () => {
-        if (electron_1.BrowserWindow.getAllWindows().length === 0)
-            createWindow();
-        else
-            mainWindow?.show();
-    });
-});
+}
 electron_1.app.on('window-all-closed', () => {
     for (const proc of activeStreams.values())
         proc.kill();

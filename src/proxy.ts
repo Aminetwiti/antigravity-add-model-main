@@ -733,12 +733,10 @@ function handleGetAvailableModelsProxy(
 // ─── Main Request Handler ─────────────────────────────────────────────────
 
 function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
-  req.url = req.url!.replace(/^.*\/dummy_path_padding/, '');
-  // Strip binary patch padding (from LS hostname replacement)
-  req.url = req.url!.replace(/\/v1internal\/x{7}/, '');
-
-  // Health check
+  // Health check — keep this FIRST so the LS sees a live port even if other
+  // initialization (padding strip, model loading, etc.) is delayed or fails.
   if (req.method === 'GET' && (req.url === '/health' || req.url === '/healthz')) {
+    log.info(`[Proxy] /health hit from ${req.socket.remoteAddress || 'unknown'}`);
     const memUsage = process.memoryUsage();
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(
@@ -762,6 +760,10 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
     );
     return;
   }
+
+  req.url = req.url!.replace(/^.*\/dummy_path_padding/, '');
+  // Strip binary patch padding (from LS hostname replacement)
+  req.url = req.url!.replace(/\/v1internal\/x{7}/, '');
 
   // P0-4: Enforce maximum request body size to prevent memory exhaustion DoS
   const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10 MB
@@ -1296,13 +1298,20 @@ export function startProxy(): Promise<number> {
     try {
       server = http.createServer(handleRequest);
 
-      let primaryPort = 50999;
+      // P2: Make port/host configurable via env vars so the proxy can be
+      // tuned per-machine without recompiling. Defaults preserve legacy behavior.
+      const envPort = parseInt(process.env.AG_PROXY_PORT || '', 10);
+      const defaultPort = Number.isFinite(envPort) && envPort > 0 ? envPort : 50999;
+      const defaultHost = process.env.AG_PROXY_HOST || '127.0.0.1';
 
-      function tryListen(port: number): void {
-        server!.listen(port, '127.0.0.1', () => {
+      let primaryPort = defaultPort;
+      let primaryHost = defaultHost;
+
+      function tryListen(port: number, host: string): void {
+        server!.listen(port, host, () => {
           proxyPort = (server!.address() as import('net').AddressInfo).port;
-          log.info(`[Proxy] Server listening on http://127.0.0.1:${proxyPort}`);
-          
+          log.info(`[Proxy] Server listening on http://${host}:${proxyPort}`);
+
           // Execute cleanup initialization after the server is already listening
           // so that failures here don't prevent the port from binding.
           try {
@@ -1310,23 +1319,29 @@ export function startProxy(): Promise<number> {
           } catch (err) {
             log.error('[Proxy] Failed to start cleanup interval:', err);
           }
-          
+
           resolve(proxyPort);
         });
       }
 
       server.on('error', (err: NodeJS.ErrnoException) => {
-        if (err.code === 'EADDRINUSE' && primaryPort === 50999) {
-          log.warn('[Proxy] Port 50999 is already in use. Retrying on dynamic port...');
+        // Log full error details for diagnostics on new machines.
+        log.error(`[Proxy] Server error: code=${err.code} message=${err.message} syscall=${err.syscall || ''} address=${(err as any).address || ''} port=${(err as any).port || ''}`);
+        if (err.code === 'EADDRINUSE' && primaryPort === defaultPort) {
+          log.warn(`[Proxy] Port ${defaultPort} is already in use. Retrying on dynamic port...`);
           primaryPort = 0;
-          tryListen(0);
+          tryListen(0, primaryHost);
+        } else if (err.code === 'EACCES') {
+          // P2: Surface permission errors clearly instead of silently failing.
+          log.error(`[Proxy] Permission denied binding to ${primaryHost}:${primaryPort}. Try a different port (AG_PROXY_PORT) or run with sufficient privileges.`);
+          reject(err);
         } else {
           log.error('[Proxy] Startup failed:', err);
           reject(err);
         }
       });
 
-      tryListen(primaryPort);
+      tryListen(primaryPort, primaryHost);
     } catch (err) {
       log.error('[Proxy] Unexpected error during startProxy:', err);
       reject(err);

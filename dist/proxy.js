@@ -629,11 +629,10 @@ function handleGetAvailableModelsProxy(res, reqBody, lsUrl) {
 }
 // ─── Main Request Handler ─────────────────────────────────────────────────
 function handleRequest(req, res) {
-    req.url = req.url.replace(/^.*\/dummy_path_padding/, '');
-    // Strip binary patch padding (from LS hostname replacement)
-    req.url = req.url.replace(/\/v1internal\/x{7}/, '');
-    // Health check
+    // Health check — keep this FIRST so the LS sees a live port even if other
+    // initialization (padding strip, model loading, etc.) is delayed or fails.
     if (req.method === 'GET' && (req.url === '/health' || req.url === '/healthz')) {
+        electron_log_1.default.info(`[Proxy] /health hit from ${req.socket.remoteAddress || 'unknown'}`);
         const memUsage = process.memoryUsage();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -655,6 +654,9 @@ function handleRequest(req, res) {
         }));
         return;
     }
+    req.url = req.url.replace(/^.*\/dummy_path_padding/, '');
+    // Strip binary patch padding (from LS hostname replacement)
+    req.url = req.url.replace(/\/v1internal\/x{7}/, '');
     // P0-4: Enforce maximum request body size to prevent memory exhaustion DoS
     const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10 MB
     let bodyLength = 0;
@@ -1143,11 +1145,17 @@ function startProxy() {
     return new Promise((resolve, reject) => {
         try {
             server = http.createServer(handleRequest);
-            let primaryPort = 50999;
-            function tryListen(port) {
-                server.listen(port, '127.0.0.1', () => {
+            // P2: Make port/host configurable via env vars so the proxy can be
+            // tuned per-machine without recompiling. Defaults preserve legacy behavior.
+            const envPort = parseInt(process.env.AG_PROXY_PORT || '', 10);
+            const defaultPort = Number.isFinite(envPort) && envPort > 0 ? envPort : 50999;
+            const defaultHost = process.env.AG_PROXY_HOST || '127.0.0.1';
+            let primaryPort = defaultPort;
+            let primaryHost = defaultHost;
+            function tryListen(port, host) {
+                server.listen(port, host, () => {
                     proxyPort = server.address().port;
-                    electron_log_1.default.info(`[Proxy] Server listening on http://127.0.0.1:${proxyPort}`);
+                    electron_log_1.default.info(`[Proxy] Server listening on http://${host}:${proxyPort}`);
                     // Execute cleanup initialization after the server is already listening
                     // so that failures here don't prevent the port from binding.
                     try {
@@ -1160,17 +1168,24 @@ function startProxy() {
                 });
             }
             server.on('error', (err) => {
-                if (err.code === 'EADDRINUSE' && primaryPort === 50999) {
-                    electron_log_1.default.warn('[Proxy] Port 50999 is already in use. Retrying on dynamic port...');
+                // Log full error details for diagnostics on new machines.
+                electron_log_1.default.error(`[Proxy] Server error: code=${err.code} message=${err.message} syscall=${err.syscall || ''} address=${err.address || ''} port=${err.port || ''}`);
+                if (err.code === 'EADDRINUSE' && primaryPort === defaultPort) {
+                    electron_log_1.default.warn(`[Proxy] Port ${defaultPort} is already in use. Retrying on dynamic port...`);
                     primaryPort = 0;
-                    tryListen(0);
+                    tryListen(0, primaryHost);
+                }
+                else if (err.code === 'EACCES') {
+                    // P2: Surface permission errors clearly instead of silently failing.
+                    electron_log_1.default.error(`[Proxy] Permission denied binding to ${primaryHost}:${primaryPort}. Try a different port (AG_PROXY_PORT) or run with sufficient privileges.`);
+                    reject(err);
                 }
                 else {
                     electron_log_1.default.error('[Proxy] Startup failed:', err);
                     reject(err);
                 }
             });
-            tryListen(primaryPort);
+            tryListen(primaryPort, primaryHost);
         }
         catch (err) {
             electron_log_1.default.error('[Proxy] Unexpected error during startProxy:', err);

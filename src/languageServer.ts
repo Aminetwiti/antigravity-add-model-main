@@ -171,6 +171,23 @@ function setupNodeModules(env: Record<string, string | undefined>, modules: Node
 }
 
 /**
+ * Kills any orphaned language_server processes.
+ */
+async function killZombieLanguageServers(): Promise<void> {
+  return new Promise((resolve) => {
+    try {
+      if (process.platform === 'win32') {
+        execFile('taskkill', ['/F', '/IM', 'language_server.exe'], () => resolve());
+      } else {
+        execFile('pkill', ['-f', 'language_server'], () => resolve());
+      }
+    } catch {
+      resolve();
+    }
+  });
+}
+
+/**
  * Spawn the language server and resolve with a LanguageServerHandle once
  * the LS reports its HTTP port. Rejects on timeout or unexpected exit
  * during startup.
@@ -180,6 +197,9 @@ function setupNodeModules(env: Record<string, string | undefined>, modules: Node
  */
 export function startLanguageServer(port: number, csrf: string, headless?: boolean): Promise<LanguageServerHandle> {
   return new Promise(async (resolve, reject) => {
+    log.info('[LS] Cleaning up any zombie processes before startup...');
+    await killZombieLanguageServers();
+    
     const logStream = fs.createWriteStream(getLsLogPath(), { flags: 'w' });
 
     let proxyPort: number | undefined;

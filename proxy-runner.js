@@ -1,11 +1,14 @@
 // Standalone proxy runner — loaded by Antigravity.exe (electron) to start
 // the local proxy (dist/proxy.js) on 127.0.0.1:50999.
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-// HARD-CODED log path so we always get a log, even if electron/app fails early.
-const LOG_PATH = 'C:\\Users\\Admin\\AppData\\Local\\Temp\\ag-proxy-runner.log';
-const PORT_FILE = 'C:\\Users\\Admin\\AppData\\Local\\Temp\\ag-proxy-runner.port';
+// Portable log paths — derived from OS conventions, never hardcoded.
+// Override via AG_PROXY_RUNNER_LOG / AG_PROXY_RUNNER_PORT_FILE env vars.
+const LOG_PATH = process.env.AG_PROXY_RUNNER_LOG || path.join(os.tmpdir(), 'ag-proxy-runner.log');
+const PORT_FILE = process.env.AG_PROXY_RUNNER_PORT_FILE || path.join(os.tmpdir(), 'ag-proxy-runner.port');
+
 function w(line) {
   try {
     fs.appendFileSync(LOG_PATH, '[' + new Date().toISOString() + '] ' + line + '\n');
@@ -17,6 +20,7 @@ function w(line) {
 // Clear previous log
 try { fs.writeFileSync(LOG_PATH, ''); } catch (_) {}
 w('runner: top of file, node=' + process.version + ' pid=' + process.pid);
+w('runner: log=' + LOG_PATH + ' port_file=' + PORT_FILE);
 
 let app;
 try {
@@ -30,7 +34,7 @@ try {
 app.setName('Antigravity');
 w('runner: setName(Antigravity), getName=' + app.getName());
 
-// Configure electron-log to write to our hardcoded file
+// Configure electron-log to write to our portable file
 let log;
 try {
   log = require('electron-log');

@@ -181,6 +181,24 @@ function setupNodeModules(env, modules) {
     }
 }
 /**
+ * Kills any orphaned language_server processes.
+ */
+async function killZombieLanguageServers() {
+    return new Promise((resolve) => {
+        try {
+            if (process.platform === 'win32') {
+                (0, child_process_1.execFile)('taskkill', ['/F', '/IM', 'language_server.exe'], () => resolve());
+            }
+            else {
+                (0, child_process_1.execFile)('pkill', ['-f', 'language_server'], () => resolve());
+            }
+        }
+        catch {
+            resolve();
+        }
+    });
+}
+/**
  * Spawn the language server and resolve with a LanguageServerHandle once
  * the LS reports its HTTP port. Rejects on timeout or unexpected exit
  * during startup.
@@ -190,6 +208,8 @@ function setupNodeModules(env, modules) {
  */
 function startLanguageServer(port, csrf, headless) {
     return new Promise(async (resolve, reject) => {
+        electron_log_1.default.info('[LS] Cleaning up any zombie processes before startup...');
+        await killZombieLanguageServers();
         const logStream = fs.createWriteStream((0, paths_1.getLsLogPath)(), { flags: 'w' });
         let proxyPort;
         try {

@@ -90,6 +90,7 @@ Options:
   --json                 Machine-readable JSON output
   --verbose, -v          Verbose output
   --yes, -y              Auto-confirm prompts
+  --auto-elevate, -E     Re-launch with admin/sudo if not already elevated
   --follow, -f           Follow log output (logs command)
   --lines N, -n N        Number of lines (logs command)
   --watch, -w            Re-run diagnostic periodically (doctor command)
@@ -115,6 +116,57 @@ function buildContext(parsed: ReturnType<typeof parseArgs>): CommandContext {
   };
 }
 
+/**
+ * Check if we're running with admin privileges on Windows.
+ * Returns true if admin, false otherwise.
+ */
+function isAdmin(): boolean {
+  if (process.platform !== 'win32') {
+    // On Unix, check if effective UID is 0
+    return typeof process.getuid === 'function' && process.getuid() === 0;
+  }
+  try {
+    const { execFileSync } = require('child_process');
+    const out = execFileSync('net', ['session'], { stdio: 'pipe', windowsHide: true });
+    return out.toString().toLowerCase().includes('there are no entries');
+  } catch {
+    // net session fails with "Access is denied" if not admin
+    return false;
+  }
+}
+
+/**
+ * Re-launch the current process with admin privileges (Windows) or sudo (Unix).
+ * Returns true if re-launch was initiated (caller should exit).
+ * Returns false if already admin or re-launch failed.
+ */
+function tryAutoElevate(): boolean {
+  const platform = process.platform;
+  const args = process.argv.slice(1);
+  const exe = process.execPath;
+  const script = process.argv[1] || '';
+
+  try {
+    if (platform === 'win32') {
+      // Use PowerShell Start-Process -Verb RunAs to trigger UAC
+      const { execFileSync } = require('child_process');
+      const psArgs = [
+        '-NoProfile',
+        '-Command',
+        `Start-Process -FilePath "${exe}" -ArgumentList '${script.replace(/'/g, "''")} ${args.join(' ')}' -Verb RunAs -Wait`,
+      ];
+      execFileSync('powershell', psArgs, { stdio: 'inherit', windowsHide: true });
+      return true;
+    }
+    // Unix: try sudo -n (non-interactive)
+    const { execFileSync } = require('child_process');
+    execFileSync('sudo', ['-n', exe, script, ...args], { stdio: 'inherit' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // In worker mode (called from the Electron UI's worker pool), we must NOT
 // call process.exit() — the host keeps the process alive for subsequent calls.
 const isWorker = process.env.AG_WORKER_ID !== undefined;
@@ -123,6 +175,22 @@ export async function main(argv: string[]): Promise<number> {
   const parsed = parseArgs(argv);
   const ctx = buildContext(parsed);
   const [cmd, sub, ...rest] = parsed.command;
+
+  // Auto-elevate: if --auto-elevate is set and we're not admin, re-launch
+  const wantElevate = Boolean(parsed.options['auto-elevate'] || parsed.options.E);
+  if (wantElevate && !isAdmin()) {
+    if (process.env.AG_ELEVATED === '1') {
+      // Already tried once — don't loop
+      console.error(c.yellow('Warning: not running as admin, some operations may fail'));
+    } else {
+      console.error(c.cyan('Requesting admin privileges...'));
+      const relaunched = tryAutoElevate();
+      if (relaunched) {
+        return 0; // Exit cleanly after re-launch
+      }
+      console.error(c.yellow('Auto-elevation failed or cancelled. Continuing without admin.'));
+    }
+  }
 
   try {
     switch (cmd) {

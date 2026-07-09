@@ -1,5 +1,9 @@
 $ErrorActionPreference = 'Continue'
 
+# Portable paths — derived from $PSScriptRoot, never hardcoded.
+$ScriptDir = $PSScriptRoot
+$AgDoctor = Join-Path $ScriptDir 'ag-doctor\bin\ag-doctor.js'
+
 Write-Host '== [1] Kill Antigravity processes ==' -ForegroundColor Cyan
 Get-Process | Where-Object { $_.Name -like 'Antigravity*' -or $_.Name -like 'language_server*' } | ForEach-Object {
   Write-Host ("  killing {0} (PID {1})" -f $_.Name, $_.Id)
@@ -14,18 +18,22 @@ if ($conn) { Write-Host "  Port 50999 still in use by PID $($conn.OwningProcess)
 
 Write-Host ''
 Write-Host '== [3] Truncate main.log to capture fresh startup ==' -ForegroundColor Cyan
-$logPath = "$env:APPDATA\Antigravity\logs\main.log"
+$logPath = Join-Path $env:APPDATA 'Antigravity\logs\main.log'
 if (Test-Path $logPath) {
   # rename current log so the new run creates a fresh one, but keep the old
-  Rename-Item -Path $logPath -NewName "main.previous.log" -Force
-  Write-Host "  Renamed main.log -> main.previous.log"
+  Rename-Item -Path $logPath -NewName 'main.previous.log' -Force
+  Write-Host '  Renamed main.log -> main.previous.log'
 }
 
 Write-Host ''
 Write-Host '== [4] Launch Antigravity ==' -ForegroundColor Cyan
-$exe = 'C:\Users\Admin\AppData\Local\Programs\antigravity\Antigravity.exe'
-Start-Process -FilePath $exe
-Write-Host '  Launched.'
+$exe = Join-Path $env:LOCALAPPDATA 'Programs\antigravity\Antigravity.exe'
+if (Test-Path $exe) {
+  Start-Process -FilePath $exe
+  Write-Host '  Launched.'
+} else {
+  Write-Host ("  Antigravity.exe not found at: " + $exe) -ForegroundColor Red
+}
 
 Write-Host ''
 Write-Host '== [5] Poll port 50999 (up to 45s) + scan new log for Proxy ==' -ForegroundColor Cyan
@@ -56,6 +64,10 @@ if (Test-Path $logPath) {
 
 Write-Host ''
 Write-Host '== [7] ag-doctor doctor ==' -ForegroundColor Cyan
-node 'C:\Business\tools\solutions\antigravity-add-model-main\ag-doctor\bin\ag-doctor.js' doctor
+if (Test-Path $AgDoctor) {
+  & node $AgDoctor doctor
+} else {
+  Write-Host ("ag-doctor not found at: " + $AgDoctor) -ForegroundColor Yellow
+}
 
 Read-Host 'Enter to close'

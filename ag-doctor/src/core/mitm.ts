@@ -10,6 +10,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
+import crypto from 'crypto';
 import { getPlatform } from './platform';
 import { ensureCa, readCa, getCaCertPath, CA_NAME } from './cert';
 import { probeWithProxy } from './probe';
@@ -36,6 +37,8 @@ export interface MitmStatus {
     path: string | null;
     fingerprint: string | null;
     installed: boolean;
+    expiresAt: string | null;
+    isExpired: boolean;
   };
   proxy: {
     host: string | null;
@@ -101,6 +104,23 @@ export async function getMitmStatus(port = DEFAULT_MITM_PORT): Promise<MitmStatu
     }
   }
 
+  let expiresAt: string | null = null;
+  let isExpired = false;
+  if (ca?.certPath && fs.existsSync(ca.certPath)) {
+    try {
+      const pem = fs.readFileSync(ca.certPath, 'utf8');
+      const x509 = new crypto.X509Certificate(pem);
+      expiresAt = x509.validTo;
+      isExpired = new Date(expiresAt).getTime() < Date.now();
+      if (isExpired) {
+        details.push(`WARNING: CA Certificate expired on ${expiresAt}`);
+        caInstalled = false; // Force re-install state if expired
+      }
+    } catch (e) {
+      // Ignore X509 parsing errors
+    }
+  }
+
   return {
     caExists: !!ca,
     caInstalled,
@@ -119,6 +139,8 @@ export async function getMitmStatus(port = DEFAULT_MITM_PORT): Promise<MitmStatu
       path: ca?.certPath ?? null,
       fingerprint: ca?.fingerprint ?? null,
       installed: caInstalled,
+      expiresAt,
+      isExpired,
     },
     proxy: {
       host: proxyHost,

@@ -1,5 +1,14 @@
 $ErrorActionPreference = 'Continue'
 
+# Portable paths — derived from $PSScriptRoot, never hardcoded.
+$ScriptDir = $PSScriptRoot
+$Root = $ScriptDir
+$AgDoctor = Join-Path $ScriptDir 'ag-doctor\bin\ag-doctor.js'
+$StubJs = Join-Path $ScriptDir 'proxy-stub.js'
+$LogFile = Join-Path $env:TEMP 'ag-proxy-stub.log'
+$OutFile = Join-Path $env:TEMP 'ag-proxy-stub.out'
+$ErrFile = Join-Path $env:TEMP 'ag-proxy-stub.err'
+
 # 1. Kill the stub so port 50999 is free for the real proxy
 Write-Host '== [1] Stop proxy stub (free 50999) ==' -ForegroundColor Cyan
 Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
@@ -19,8 +28,7 @@ Start-Sleep -Seconds 2
 # 3. Build the root project (recompile src/ -> dist/)
 Write-Host ''
 Write-Host '== [3] npm run build (root) ==' -ForegroundColor Cyan
-$root = 'C:\Business\tools\solutions\antigravity-add-model-main'
-Push-Location $root
+Push-Location $Root
 try {
   $nodeCmd = Get-Command node.exe -ErrorAction SilentlyContinue
   if (-not $nodeCmd) { Write-Host 'node.exe not found' -ForegroundColor Red; exit 1 }
@@ -32,18 +40,17 @@ try {
 # 4. Repack app.asar
 Write-Host ''
 Write-Host '== [4] Repack app.asar ==' -ForegroundColor Cyan
-Push-Location $root
+Push-Location $Root
 try {
   & $nodeCmd.Source .\node_modules\.bin\electron 2>$null  # warm npx cache, ignore
-  # Use @electron/asar directly via npx
-  $DestAsar = "$env:LOCALAPPDATA\Programs\antigravity\resources\app.asar"
+  $DestAsar = Join-Path $env:LOCALAPPDATA 'Programs\antigravity\resources\app.asar'
   # Backup current asar
   if (Test-Path $DestAsar) {
     $bak = $DestAsar + '.bak-' + (Get-Date -Format 'yyyyMMddHHmmss')
     Copy-Item $DestAsar $bak
     Write-Host ("  backed up -> " + $bak) -ForegroundColor DarkGray
   }
-  & npx -y @electron/asar pack $root $DestAsar --unpack-dir "{node_modules,scratch,.git}" 2>&1 | Select-Object -Last 20
+  & npx -y @electron/asar pack $Root $DestAsar --unpack-dir "{node_modules,scratch,.git}" 2>&1 | Select-Object -Last 20
   if ($LASTEXITCODE -ne 0) { Write-Host "asar pack exited $LASTEXITCODE" -ForegroundColor Red; Pop-Location; exit 1 }
   Write-Host '  repack OK' -ForegroundColor Green
 } finally { Pop-Location }
@@ -51,8 +58,8 @@ try {
 # 5. Relaunch Antigravity
 Write-Host ''
 Write-Host '== [5] Launch Antigravity ==' -ForegroundColor Cyan
-$exe = "$env:LOCALAPPDATA\Programs\antigravity\Antigravity.exe"
-if (Test-Path $exe) { Start-Process -FilePath $exe; Write-Host '  launched.' } else { Write-Host "  MISSING: $exe" -ForegroundColor Red }
+$exe = Join-Path $env:LOCALAPPDATA 'Programs\antigravity\Antigravity.exe'
+if (Test-Path $exe) { Start-Process -FilePath $exe; Write-Host '  launched.' } else { Write-Host ("  MISSING: " + $exe) -ForegroundColor Red }
 
 # 6. Poll 50999
 Write-Host ''
@@ -81,7 +88,11 @@ if ($ready) {
 
 Write-Host ''
 Write-Host '== [7] ag-doctor doctor ==' -ForegroundColor Cyan
-& $nodeCmd.Source 'C:\Business\tools\solutions\antigravity-add-model-main\ag-doctor\bin\ag-doctor.js' doctor
+if (Test-Path $AgDoctor) {
+  & $nodeCmd.Source $AgDoctor doctor
+} else {
+  Write-Host ("ag-doctor not found at: " + $AgDoctor) -ForegroundColor Yellow
+}
 
 Write-Host ''
 if ($ready -and -not $stub) {
@@ -91,10 +102,13 @@ if ($ready -and -not $stub) {
 } else {
   Write-Host 'REAL PROXY DID NOT START on 50999 after 60s.' -ForegroundColor Red
   Write-Host 'Restarting stub to restore connectivity...' -ForegroundColor Yellow
-  $stubJs = 'C:\Business\tools\solutions\antigravity-add-model-main\proxy-stub.js'
-  Start-Process -FilePath $nodeCmd.Source -ArgumentList "`"$stubJs`"" -WindowStyle Hidden `
-    -RedirectStandardOutput 'C:\Users\Admin\AppData\Local\Temp\proxy-stub.out' `
-    -RedirectStandardError 'C:\Users\Admin\AppData\Local\Temp\proxy-stub.err'
-  Start-Sleep -Seconds 2
-  Write-Host '  stub relaunched.'
+  if (Test-Path $StubJs) {
+    Start-Process -FilePath $nodeCmd.Source -ArgumentList "`"$StubJs`"" -WindowStyle Hidden `
+      -RedirectStandardOutput $OutFile `
+      -RedirectStandardError $ErrFile
+    Start-Sleep -Seconds 2
+    Write-Host '  stub relaunched.'
+  } else {
+    Write-Host ("  proxy-stub.js not found at: " + $StubJs) -ForegroundColor Yellow
+  }
 }

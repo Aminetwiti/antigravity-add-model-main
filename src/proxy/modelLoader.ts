@@ -150,6 +150,17 @@ export function loadCustomModels(): CustomModel[] {
     return validateModels(decrypted);
   } catch (e) {
     log.error('[Proxy] Failed to parse custom_models.json', e);
-    return [];
+    // Auto-recovery: backup corrupted file and recreate defaults
+    try {
+      if (fs.existsSync(filePath)) {
+        cryptoStore.backupFile(filePath);
+        fs.renameSync(filePath, filePath + '.corrupt');
+        log.warn(`[Proxy] Corrupted custom_models.json moved to ${filePath}.corrupt. Recreating defaults.`);
+      }
+      return createDefaultModelsFile(filePath);
+    } catch (recoveryErr) {
+      log.error('[Proxy] Auto-recovery failed:', recoveryErr);
+      return [];
+    }
   }
 }
