@@ -13,11 +13,10 @@ Thumbs.db
 
 # Development artifacts
 scratch/
+.env
 
 # Compiled binary mocks
-dist/__mocks__/
-dist/*.test.js
-dist/**/*.test.js
+dist/
 
 # Archived artifacts
 *.rar
@@ -28,8 +27,5 @@ logs/*.txt
 
 # Local build artifacts
 archive/
-ag-doctor/dist/*
 ag-doctor-ui/dist/*
 ag-doctor-ui/release/*
-dist/*
-dist/proxy/*
