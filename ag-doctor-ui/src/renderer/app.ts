@@ -236,7 +236,7 @@ interface MitmStatus {
   };
 }
 
-type ObjectiveKey = 'antigravity' | 'mitm' | 'doctor' | 'patch' | 'logs';
+type ObjectiveKey = 'antigravity' | 'mitm' | 'doctor' | 'patch' | 'logs' | 'proxy';
 
 const OBJECTIVE_LABELS: Record<ObjectiveKey, string> = {
   antigravity: "Vérifier les statuts d'Antigravity et version",
@@ -633,6 +633,62 @@ $('#runDoctorBtn').addEventListener('click', () => void runDoctor());
 $('#quickRunBtn').addEventListener('click', () => void runDoctor());
 $('#refreshBtn').addEventListener('click', () => void runDoctor());
 $('#repairBtn').addEventListener('click', () => void runRepair());
+
+// Fix All: full auto-repair with admin elevation (UAC prompt will appear)
+$('#fixAllBtn')?.addEventListener('click', () => void runFixAll());
+
+// Start Stub: emergency proxy stub on port 50999 (no admin needed)
+$('#startStubBtn')?.addEventListener('click', () => void runStartStub());
+
+async function runFixAll(): Promise<void> {
+  const ok = await confirmModal(
+    'Fix All — Réparation complète',
+    'Cela va lancer <code>ag-doctor repair --yes --auto-elevate</code> avec élévation admin (UAC). ' +
+    'Toutes les actions de réparation seront effectuées : patch, port 50999, proxy, CA cert.',
+    { confirmLabel: 'Fix All', danger: true },
+  );
+  if (!ok) return;
+  setStatus('Fix All — élévation admin…', 'busy');
+  $('#fixAllBtn')?.setAttribute('disabled', 'true');
+  try {
+    // Use the existing IPC handler that spawns the elevated repair script
+    const r = await window.ag.repairRun();
+    if (r?.ok) {
+      toast('Fix All completed successfully', 'ok', 5000);
+      setObjective('patch', 'ok', 'Réparation complète effectuée');
+    } else {
+      toast(`Fix All failed: ${r?.error ?? 'unknown'}`, 'err', 6000);
+      setObjective('patch', 'error', 'Échec de la réparation complète');
+    }
+    setStatus('Refreshing diagnostic…', 'busy');
+    await runDoctor();
+  } catch (e) {
+    toast(`Fix All error: ${(e as Error).message}`, 'err');
+    setStatus('Error', 'err');
+  } finally {
+    $('#fixAllBtn')?.removeAttribute('disabled');
+  }
+}
+
+async function runStartStub(): Promise<void> {
+  setStatus('Starting proxy stub…', 'busy');
+  $('#startStubBtn')?.setAttribute('disabled', 'true');
+  try {
+    const r = await window.ag.proxyStartStub();
+    if (r?.ok) {
+      toast(`Proxy stub started (pid=${r.pid ?? '?'})`, 'ok', 5000);
+      setObjective('proxy', 'ok', 'Stub proxy actif sur 50999');
+    } else {
+      toast(`Stub failed: ${r?.error ?? 'unknown'}`, 'err', 6000);
+      setObjective('proxy', 'error', 'Échec du stub');
+    }
+  } catch (e) {
+    toast(`Stub error: ${(e as Error).message}`, 'err');
+  } finally {
+    $('#startStubBtn')?.removeAttribute('disabled');
+    setStatus('Idle', 'ready');
+  }
+}
 
 // Reusable template for objective icons — avoids innerHTML on every doctor run
 const objectiveIconTpl = document.createElement('template');
@@ -1614,6 +1670,7 @@ async function loadAntigravityStatus(): Promise<void> {
     infoTable.innerHTML = `<div class="empty-state"><p>Error: ${escapeHtml((e as Error).message)}</p></div>`;
     setStatus('Error', 'err');
   }
+  });
 }
 
 // Backward compat alias
