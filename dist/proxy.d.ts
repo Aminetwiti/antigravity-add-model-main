@@ -1,6 +1,7 @@
 import type { CustomModel, GeminiRequestBody, GeminiCandidate, CloudCodeResponse } from './proxy/types';
 export type { CustomModel, GeminiRequestBody, GeminiCandidate, CloudCodeResponse };
-export { generateModelPlaceholderId, toSlug } from './proxy/idGenerator';
+import { generateModelPlaceholderId, toSlug } from './proxy/idGenerator';
+export { generateModelPlaceholderId, toSlug };
 /**
  * Parses the Retry-After header from upstream responses (RFC 7231 §7.1.3).
  * Returns delay in milliseconds, or 0 if no valid header is present.

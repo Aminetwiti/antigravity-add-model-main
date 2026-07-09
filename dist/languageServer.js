@@ -47,6 +47,7 @@ exports.setIntentionalTermination = setIntentionalTermination;
 exports.startAndMonitorLanguageServer = startAndMonitorLanguageServer;
 exports.killLanguageServer = killLanguageServer;
 exports.setupLocalCertTrust = setupLocalCertTrust;
+const electron_log_1 = __importDefault(require("electron-log"));
 const child_process_1 = require("child_process");
 const electron_1 = require("electron");
 const shell_env_1 = require("shell-env");
@@ -192,9 +193,12 @@ function startLanguageServer(port, csrf, headless) {
         const logStream = fs.createWriteStream((0, paths_1.getLsLogPath)(), { flags: 'w' });
         let proxyPort;
         try {
+            electron_log_1.default.info('[LS] before startProxy');
             proxyPort = await (0, proxy_1.startProxy)();
+            electron_log_1.default.info('[LS] after startProxy, port: ' + proxyPort);
         }
         catch (err) {
+            electron_log_1.default.error('[LS] startProxy failed:', err);
             console.error('[LanguageServer] Failed to start local proxy:', err);
         }
         const apiServerUrl = proxyPort ? `http://localhost:${proxyPort}` : 'https://generativelanguage.googleapis.com';

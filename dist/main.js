@@ -36,14 +36,6 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-// ─── Global Safety Net ────────────────────────────────────────────────────
-// Catch any stray async error so it never kills the main process again.
-process.on('uncaughtException', (err) => {
-    console.error('[Main] Uncaught exception (swallowed):', err && (err.stack || err.message || err));
-});
-process.on('unhandledRejection', (reason) => {
-    console.error('[Main] Unhandled rejection (swallowed):', reason && (reason.stack || reason.message || reason));
-});
 const electron_1 = require("electron");
 const main_1 = __importDefault(require("electron-log/main"));
 const ipcHandlers_1 = require("./ipcHandlers");
