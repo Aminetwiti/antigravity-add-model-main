@@ -46,6 +46,32 @@ function invalidateCache(prefix) {
             ipcCache.delete(k);
     }
 }
+// ─────────────────────────────────────────────────────────────────────────────
+// withTimeout — wraps a promise so it rejects after `ms` milliseconds.
+// F-14: prevents the UI from staying on "Loading…" forever if the IPC handler
+// never resolves (worker crash, network hang, etc.).
+// ─────────────────────────────────────────────────────────────────────────────
+function withTimeout(promise, ms, label) {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            reject(new Error(`${label} timed out after ${ms / 1000}s`));
+        }, ms);
+        promise.then((v) => { clearTimeout(timer); resolve(v); }, (e) => { clearTimeout(timer); reject(e); });
+    });
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// inflight guards — prevent concurrent loadX() calls from racing (F-21).
+// If a load is already running, return its existing promise.
+// ─────────────────────────────────────────────────────────────────────────────
+const inflightLoads = new Map();
+function guardLoad(key, fn) {
+    const existing = inflightLoads.get(key);
+    if (existing)
+        return existing;
+    const p = fn().finally(() => inflightLoads.delete(key));
+    inflightLoads.set(key, p);
+    return p;
+}
 const idleScheduler = (() => {
     const win = window;
     if (win.requestIdleCallback) {
@@ -66,6 +92,7 @@ const OBJECTIVE_LABELS = {
     doctor: "Faire un diagnostic (Doctor)",
     patch: "Faire un repair (Réparer)",
     logs: "Afficher et suivre les logs",
+    proxy: "Démarrer/arrêter le proxy stub sur 50999",
 };
 // ─────────────────────────────────────────────────────────────────────────────
 // Cached SVG icon strings (avoid recreating on every render)
@@ -407,6 +434,61 @@ $('#runDoctorBtn').addEventListener('click', () => void runDoctor());
 $('#quickRunBtn').addEventListener('click', () => void runDoctor());
 $('#refreshBtn').addEventListener('click', () => void runDoctor());
 $('#repairBtn').addEventListener('click', () => void runRepair());
+// Fix All: full auto-repair with admin elevation (UAC prompt will appear)
+$('#fixAllBtn')?.addEventListener('click', () => void runFixAll());
+// Start Stub: emergency proxy stub on port 50999 (no admin needed)
+$('#startStubBtn')?.addEventListener('click', () => void runStartStub());
+async function runFixAll() {
+    const ok = await confirmModal('Fix All — Réparation complète', 'Cela va lancer <code>ag-doctor repair --yes --auto-elevate</code> avec élévation admin (UAC). ' +
+        'Toutes les actions de réparation seront effectuées : patch, port 50999, proxy, CA cert.', { confirmLabel: 'Fix All', danger: true });
+    if (!ok)
+        return;
+    setStatus('Fix All — élévation admin…', 'busy');
+    $('#fixAllBtn')?.setAttribute('disabled', 'true');
+    try {
+        // Use the existing IPC handler that spawns the elevated repair script
+        const r = await window.ag.repairRun();
+        if (r?.ok) {
+            toast('Fix All completed successfully', 'ok', 5000);
+            setObjective('patch', 'ok', 'Réparation complète effectuée');
+        }
+        else {
+            toast(`Fix All failed: ${r?.error ?? 'unknown'}`, 'err', 6000);
+            setObjective('patch', 'error', 'Échec de la réparation complète');
+        }
+        setStatus('Refreshing diagnostic…', 'busy');
+        await runDoctor();
+    }
+    catch (e) {
+        toast(`Fix All error: ${e.message}`, 'err');
+        setStatus('Error', 'err');
+    }
+    finally {
+        $('#fixAllBtn')?.removeAttribute('disabled');
+    }
+}
+async function runStartStub() {
+    setStatus('Starting proxy stub…', 'busy');
+    $('#startStubBtn')?.setAttribute('disabled', 'true');
+    try {
+        const r = await window.ag.proxyStartStub();
+        if (r?.ok) {
+            toast(`Proxy stub started (pid=${r.pid ?? '?'})`, 'ok', 5000);
+            setObjective('proxy', 'ok', 'Stub proxy actif sur 50999');
+        }
+        else {
+            toast(`Stub failed: ${r?.error ?? 'unknown'}`, 'err', 6000);
+            setObjective('proxy', 'error', 'Échec du stub');
+        }
+    }
+    catch (e) {
+        toast(`Stub error: ${e.message}`, 'err');
+    }
+    finally {
+        $('#startStubBtn')?.removeAttribute('disabled');
+        setStatus('Idle', 'ready');
+    }
+}
 // Reusable template for objective icons — avoids innerHTML on every doctor run
 const objectiveIconTpl = document.createElement('template');
 function setObjective(key, state, detail) {
@@ -758,62 +840,64 @@ const mitmStatusEl = $('#mitmStatus');
 // Reusable template for MITM status — avoids creating a new <template> each load
 const mitmTpl = document.createElement('template');
 async function loadMitmStatus() {
-    setStatus('Loading MITM status…', 'busy');
-    showSkeleton(mitmStatusEl, 'cards', 3);
-    try {
-        const r = await window.ag.run(['mitm', 'status', '--json']);
-        const s = JSON.parse(r.stdout);
-        const caBanner = s.ca.installed
-            ? `<div class="patch-banner ok">
+    return guardLoad('mitm', async () => {
+        setStatus('Loading MITM status…', 'busy');
+        showSkeleton(mitmStatusEl, 'cards', 3);
+        try {
+            const r = await withTimeout(window.ag.run(['mitm', 'status', '--json']), 12_000, 'mitm status');
+            const s = JSON.parse(r.stdout);
+            const caBanner = s.ca.installed && !s.ca.isExpired
+                ? `<div class="patch-banner ok">
            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
            <div class="patch-banner-body">
              <div class="patch-banner-title">CA certificate installed</div>
              <div class="patch-banner-text">System trusts the local MITM CA.</div>
            </div>
          </div>`
-            : `<div class="patch-banner warn">
+                : `<div class="patch-banner warn">
            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
            <div class="patch-banner-body">
-             <div class="patch-banner-title">CA certificate not installed</div>
-             <div class="patch-banner-text">Install the CA to avoid TLS errors in intercepted applications.</div>
+             <div class="patch-banner-title">${s.ca.isExpired ? 'CA certificate expired' : 'CA certificate not installed'}</div>
+             <div class="patch-banner-text">${s.ca.isExpired ? 'The certificate has expired. Use Repair All to regenerate it.' : 'Install the CA to avoid TLS errors in intercepted applications.'}</div>
            </div>
          </div>`;
-        const proxyBanner = s.proxy.redirected
-            ? `<div class="patch-banner ok">
+            const proxyBanner = s.proxy.redirected
+                ? `<div class="patch-banner ok">
            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
            <div class="patch-banner-body">
              <div class="patch-banner-title">System proxy active</div>
              <div class="patch-banner-text">Traffic is redirected to ${escapeHtml(s.proxy.host ?? 'localhost')}:${s.proxy.port ?? '—'}.</div>
            </div>
          </div>`
-            : `<div class="patch-banner warn">
+                : `<div class="patch-banner warn">
            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
            <div class="patch-banner-body">
              <div class="patch-banner-title">System proxy inactive</div>
              <div class="patch-banner-text">Toggle Proxy ON to start redirecting traffic.</div>
            </div>
          </div>`;
-        const interceptionBanner = s.interception.reachable
-            ? `<div class="patch-banner ok">
+            const interceptionBanner = s.interception.reachable
+                ? `<div class="patch-banner ok">
            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
            <div class="patch-banner-body">
              <div class="patch-banner-title">Interception reachable</div>
              <div class="patch-banner-text">The proxy is listening and responding.</div>
            </div>
          </div>`
-            : `<div class="patch-banner err">
+                : `<div class="patch-banner err">
            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
            <div class="patch-banner-body">
              <div class="patch-banner-title">Interception unreachable</div>
              <div class="patch-banner-text">The proxy does not appear to be listening.</div>
            </div>
          </div>`;
-        mitmTpl.innerHTML = `
+            mitmTpl.innerHTML = `
       <div class="mitm-grid">
         <div class="mitm-card">
           <div class="mitm-card-header"><h3>CA Certificate</h3><span class="badge ${s.ca.installed ? 'ok' : 'warn'}">${s.ca.installed ? 'installed' : 'not installed'}</span></div>
           <div class="mitm-card-body">
             <div class="patch-row"><div class="patch-row-label">Generated</div><div class="patch-row-value ${s.ca.generated ? 'ok' : ''}">${s.ca.generated ? 'yes' : 'no'}</div></div>
+            <div class="patch-row"><div class="patch-row-label">Expires</div><div class="patch-row-value ${s.ca.isExpired ? 'err' : ''}">${escapeHtml(s.ca.expiresAt ?? '—')}</div></div>
             <div class="patch-row"><div class="patch-row-label">Path</div><div class="patch-row-value">${escapeHtml(s.ca.path ?? '—')}</div></div>
             <div class="patch-row"><div class="patch-row-label">Fingerprint</div><div class="patch-row-value">${escapeHtml(s.ca.fingerprint ?? '—')}</div></div>
           </div>
@@ -835,17 +919,49 @@ async function loadMitmStatus() {
           </div>
           ${interceptionBanner}
         </div>
-      </div>`;
-        mitmStatusEl.replaceChildren(mitmTpl.content);
-        setStatus('Ready');
-    }
-    catch (e) {
-        mitmStatusEl.innerHTML = `<div class="empty-state"><p>Error: ${escapeHtml(e.message)}</p></div>`;
-        setStatus('Error', 'err');
-    }
-    finally {
-        hideSkeleton(mitmStatusEl);
-    }
+      </div>
+      ${(!s.ca.installed || !s.proxy.redirected || !s.interception.reachable) ? `
+      <div style="margin-top: 20px; text-align: center;">
+        <button id="repair-all-btn" class="btn btn-primary" style="padding: 10px 20px; font-size: 14px;">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: text-bottom; margin-right: 6px;"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 9.36l-7.1 7.1a1 1 0 0 1-1.4 0l-2.8-2.8a1 1 0 0 1 0-1.4l7.1-7.1a6 6 0 0 1 9.36-7.94z"/></svg>
+          Repair All (Requires Admin)
+        </button>
+      </div>
+      ` : ''}`;
+            mitmStatusEl.replaceChildren(mitmTpl.content);
+            const repairBtn = document.getElementById('repair-all-btn');
+            if (repairBtn) {
+                repairBtn.addEventListener('click', async () => {
+                    repairBtn.setAttribute('disabled', 'true');
+                    repairBtn.innerHTML = 'Repairing... Please check UAC prompt.';
+                    setStatus('Repairing MITM...', 'busy');
+                    try {
+                        const res = await window.ag.repairRun();
+                        if (res.ok) {
+                            toast('Repair script completed successfully.', 'ok', 5000);
+                        }
+                        else {
+                            toast('Repair failed: ' + res.error, 'err', 6000);
+                        }
+                    }
+                    catch (err) {
+                        toast('Repair IPC error: ' + err.message, 'err', 6000);
+                    }
+                    finally {
+                        void loadMitmStatus();
+                    }
+                });
+            }
+            setStatus('Ready');
+        }
+        catch (e) {
+            mitmStatusEl.innerHTML = `<div class="empty-state"><p>Error: ${escapeHtml(e.message)}</p></div>`;
+            setStatus('Error', 'err');
+        }
+        finally {
+            hideSkeleton(mitmStatusEl);
+        }
+    });
 }
 async function mitmAction(args, successMsg, refresh = true) {
     setStatus(`${args.slice(1).join(' ')}…`, 'busy');
@@ -878,35 +994,36 @@ const patchStatusEl = $('#patchStatus');
 // Reusable template for patch status — avoids creating a new <template> each load
 const patchTpl = document.createElement('template');
 async function loadPatchStatus() {
-    setStatus('Loading patch status…', 'busy');
-    showSkeleton(patchStatusEl, 'lines', 5);
-    try {
-        const r = await window.ag.run(['patch', 'status', '--json']);
-        const s = JSON.parse(r.stdout);
-        const banner = s.applied
-            ? `<div class="patch-banner ok">
+    return guardLoad('patch', async () => {
+        setStatus('Loading patch status…', 'busy');
+        showSkeleton(patchStatusEl, 'lines', 5);
+        try {
+            const r = await withTimeout(window.ag.run(['patch', 'status', '--json']), 12_000, 'patch status');
+            const s = JSON.parse(r.stdout);
+            const banner = s.applied
+                ? `<div class="patch-banner ok">
              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
              <div class="patch-banner-body">
                <div class="patch-banner-title">Patch is active</div>
                <div class="patch-banner-text">language_server is redirected to the local proxy.</div>
              </div>
            </div>`
-            : s.exists
-                ? `<div class="patch-banner warn">
+                : s.exists
+                    ? `<div class="patch-banner warn">
                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
                <div class="patch-banner-body">
                  <div class="patch-banner-title">Patch is NOT applied</div>
                  <div class="patch-banner-text">Custom models will not appear in the chat dropdown until the patch is applied.</div>
                </div>
              </div>`
-                : `<div class="patch-banner err">
+                    : `<div class="patch-banner err">
                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
                <div class="patch-banner-body">
                  <div class="patch-banner-title">Binary not found</div>
                  <div class="patch-banner-text">Could not locate language_server binary.</div>
                </div>
              </div>`;
-        patchTpl.innerHTML = `
+            patchTpl.innerHTML = `
       ${banner}
       <div class="patch-row">
         <div class="patch-row-label">Binary path</div>
@@ -932,16 +1049,17 @@ async function loadPatchStatus() {
         <div class="patch-row-label">Patched URL</div>
         <div class="patch-row-value">${escapeHtml(s.patchedUrl)}</div>
       </div>`;
-        patchStatusEl.replaceChildren(patchTpl.content);
-        setStatus('Ready');
-    }
-    catch (e) {
-        patchStatusEl.innerHTML = `<div class="empty-state"><p>Error: ${escapeHtml(e.message)}</p></div>`;
-        setStatus('Error', 'err');
-    }
-    finally {
-        hideSkeleton(patchStatusEl);
-    }
+            patchStatusEl.replaceChildren(patchTpl.content);
+            setStatus('Ready');
+        }
+        catch (e) {
+            patchStatusEl.innerHTML = `<div class="empty-state"><p>Error: ${escapeHtml(e.message)}</p></div>`;
+            setStatus('Error', 'err');
+        }
+        finally {
+            hideSkeleton(patchStatusEl);
+        }
+    });
 }
 $('#patchApplyBtn').addEventListener('click', async () => {
     const ok = await confirmModal('Apply binary patch', `This will modify <code>language_server</code> to redirect API calls to the local proxy.<br><br>A backup will be created automatically.`, { confirmLabel: 'Apply patch' });
@@ -1234,75 +1352,77 @@ agRevealBtn.addEventListener('click', async () => {
     }
 });
 async function loadAntigravityStatus() {
-    setStatus('Loading Antigravity status…', 'busy');
-    setAgHero('busy', 'Checking…', 'Detecting installation');
-    try {
-        // Parallel: info IPC, status IPC, version IPC, models count
-        const [info, statusResult, versionResult, modelsResult] = await Promise.all([
-            memo('info', 5_000, () => window.ag.info()),
-            window.ag.antigravityStatus().catch((err) => ({ ok: false, data: undefined, error: err.message })),
-            window.ag.antigravityVersion().catch((err) => ({ ok: false, data: undefined, error: err.message })),
-            window.ag.run(['models', 'list', '--json']).catch(() => ({ stdout: '{"models":[]}', stderr: '', code: 0 })),
-        ]);
-        const status = statusResult.ok ? statusResult.data : null;
-        const versionData = versionResult.ok ? versionResult.data : null;
-        const modelsData = JSON.parse(modelsResult.stdout);
-        const installed = Boolean(status?.installed ?? status?.installDir);
-        const running = Boolean(status?.running ?? status?.pid);
-        const pid = status?.pid;
-        const version = versionData?.version ?? status?.version;
-        const installDir = status?.installDir ?? '';
-        // Hero card
-        if (!installed) {
-            setAgHero('err', 'Not installed', installDir || 'No installation found');
+    return guardLoad('agStatus', async () => {
+        setStatus('Loading Antigravity status…', 'busy');
+        setAgHero('busy', 'Checking…', 'Detecting installation');
+        try {
+            // Parallel: info IPC, status IPC, version IPC, models count
+            const [info, statusResult, versionResult, modelsResult] = await Promise.all([
+                memo('info', 5_000, () => window.ag.info()),
+                withTimeout(window.ag.antigravityStatus(), 10_000, 'antigravity status').catch((err) => ({ ok: false, data: undefined, error: err.message })),
+                withTimeout(window.ag.antigravityVersion(), 10_000, 'antigravity version').catch((err) => ({ ok: false, data: undefined, error: err.message })),
+                withTimeout(window.ag.run(['models', 'list', '--json']), 10_000, 'models list').catch(() => ({ stdout: '{"models":[]}', stderr: '', code: 0 })),
+            ]);
+            const status = statusResult.ok ? statusResult.data : null;
+            const versionData = versionResult.ok ? versionResult.data : null;
+            const modelsData = JSON.parse(modelsResult.stdout);
+            const installed = Boolean(status?.installed ?? status?.installDir);
+            const running = Boolean(status?.running ?? status?.pid);
+            const pid = status?.pid;
+            const version = versionData?.version ?? status?.version;
+            const installDir = status?.installDir ?? '';
+            // Hero card
+            if (!installed) {
+                setAgHero('err', 'Not installed', installDir || 'No installation found');
+            }
+            else if (running) {
+                setAgHero('ok', 'Running', `PID ${pid ?? '—'} · ${version ?? 'unknown'}`);
+                startUptimeTicker();
+            }
+            else {
+                setAgHero('warn', 'Installed · Stopped', version ?? 'Not running');
+            }
+            agHeroTitle.textContent = status?.displayName ?? 'Antigravity';
+            // Stat cards
+            agVersion.textContent = version ?? '—';
+            agPid.textContent = pid != null ? String(pid) : '—';
+            agCustomModels.textContent = String(modelsData.models?.length ?? 0);
+            if (!running && agUptime)
+                agUptime.textContent = '—';
+            // Paths
+            const paths = [
+                ['Install dir', installDir],
+                ['Binary', status?.binaryPath ?? ''],
+                ['app.asar', status?.appAsarPath ?? ''],
+                ['custom_models.json', status?.customModelsPath ?? ''],
+                ['LS log', status?.lsLogPath ?? ''],
+                ['CLI', info.cliPath],
+            ];
+            renderPaths(paths);
+            // Runtime details table
+            const rows = [
+                ['Platform', `${info.platform}/${info.arch}`],
+                ['Electron', info.electron],
+                ['Node', info.node],
+                ['Chromium', info.chrome],
+                ['Username', status?.username ?? '—'],
+                ['Home', status?.homedir ?? '—'],
+                ['CPU', status?.cpu ?? '—'],
+                ['Memory', status?.memory ?? '—'],
+            ];
+            const html = rows
+                .map(([k, v]) => `<div class="info-cell k">${escapeHtml(k)}</div><div class="info-cell v">${escapeHtml(v)}</div>`)
+                .join('');
+            infoTableTpl.innerHTML = html;
+            infoTable.replaceChildren(infoTableTpl.content);
+            setStatus('Ready');
         }
-        else if (running) {
-            setAgHero('ok', 'Running', `PID ${pid ?? '—'} · ${version ?? 'unknown'}`);
-            startUptimeTicker();
+        catch (e) {
+            setAgHero('err', 'Error', e.message);
+            infoTable.innerHTML = `<div class="empty-state"><p>Error: ${escapeHtml(e.message)}</p></div>`;
+            setStatus('Error', 'err');
         }
-        else {
-            setAgHero('warn', 'Installed · Stopped', version ?? 'Not running');
-        }
-        agHeroTitle.textContent = status?.displayName ?? 'Antigravity';
-        // Stat cards
-        agVersion.textContent = version ?? '—';
-        agPid.textContent = pid != null ? String(pid) : '—';
-        agCustomModels.textContent = String(modelsData.models?.length ?? 0);
-        if (!running && agUptime)
-            agUptime.textContent = '—';
-        // Paths
-        const paths = [
-            ['Install dir', installDir],
-            ['Binary', status?.binaryPath ?? ''],
-            ['app.asar', status?.appAsarPath ?? ''],
-            ['custom_models.json', status?.customModelsPath ?? ''],
-            ['LS log', status?.lsLogPath ?? ''],
-            ['CLI', info.cliPath],
-        ];
-        renderPaths(paths);
-        // Runtime details table
-        const rows = [
-            ['Platform', `${info.platform}/${info.arch}`],
-            ['Electron', info.electron],
-            ['Node', info.node],
-            ['Chromium', info.chrome],
-            ['Username', status?.username ?? '—'],
-            ['Home', status?.homedir ?? '—'],
-            ['CPU', status?.cpu ?? '—'],
-            ['Memory', status?.memory ?? '—'],
-        ];
-        const html = rows
-            .map(([k, v]) => `<div class="info-cell k">${escapeHtml(k)}</div><div class="info-cell v">${escapeHtml(v)}</div>`)
-            .join('');
-        infoTableTpl.innerHTML = html;
-        infoTable.replaceChildren(infoTableTpl.content);
-        setStatus('Ready');
-    }
-    catch (e) {
-        setAgHero('err', 'Error', e.message);
-        infoTable.innerHTML = `<div class="empty-state"><p>Error: ${escapeHtml(e.message)}</p></div>`;
-        setStatus('Error', 'err');
-    }
+    });
 }
 // Backward compat alias
 const loadInfo = loadAntigravityStatus;
@@ -1563,21 +1683,23 @@ function renderAntigravity(s) {
     agLsPids.textContent = s.languageServerPids.length ? s.languageServerPids.join(', ') : '—';
 }
 async function loadAntigravity() {
-    setStatus('Loading Antigravity status…', 'busy');
-    try {
-        const r = await window.ag.antigravityStatus();
-        if (!r.ok || !r.data) {
-            toast(`Antigravity: ${r.error ?? 'unknown error'}`, 'err');
+    return guardLoad('ag', async () => {
+        setStatus('Loading Antigravity status…', 'busy');
+        try {
+            const r = await withTimeout(window.ag.antigravityStatus(), 10_000, 'antigravity status');
+            if (!r.ok || !r.data) {
+                toast(`Antigravity: ${r.error ?? 'unknown error'}`, 'err');
+                setStatus('Ready');
+                return;
+            }
+            renderAntigravity(r.data);
             setStatus('Ready');
-            return;
         }
-        renderAntigravity(r.data);
-        setStatus('Ready');
-    }
-    catch (e) {
-        toast(`Error: ${e.message}`, 'err');
-        setStatus('Error', 'err');
-    }
+        catch (e) {
+            toast(`Error: ${e.message}`, 'err');
+            setStatus('Error', 'err');
+        }
+    });
 }
 $('#agRefreshBtn').addEventListener('click', () => void loadAntigravity());
 $('#agLaunchBtn').addEventListener('click', async () => {

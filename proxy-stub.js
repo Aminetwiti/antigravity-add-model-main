@@ -9,9 +9,13 @@
 // For full custom-model support, run repack.ps1 to fix the bundled proxy.
 const http = require('http');
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
-const LOG = 'C:\\Users\\Admin\\AppData\\Local\\Temp\\proxy-stub.log';
-const PORT = 50999;
+// Portable paths — derived from environment / OS conventions, never hardcoded.
+const LOG = process.env.AG_PROXY_STUB_LOG || path.join(os.tmpdir(), 'ag-proxy-stub.log');
+const PORT = parseInt(process.env.AG_PROXY_STUB_PORT || '50999', 10);
+const HOST = process.env.AG_PROXY_STUB_HOST || '127.0.0.1';
 
 function log(line) {
   const ts = new Date().toISOString();
@@ -20,7 +24,7 @@ function log(line) {
 }
 
 try { fs.writeFileSync(LOG, ''); } catch (_) {}
-log('proxy-stub starting on 127.0.0.1:' + PORT);
+log('proxy-stub starting on ' + HOST + ':' + PORT + ' (log=' + LOG + ')');
 
 const server = http.createServer((req, res) => {
   log(req.method + ' ' + req.url + ' from ' + (req.socket.remoteAddress || '?'));
@@ -54,8 +58,8 @@ server.on('error', (err) => {
   process.exit(1);
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  log('listening on http://127.0.0.1:' + PORT + ' (pid=' + process.pid + ')');
+server.listen(PORT, HOST, () => {
+  log('listening on http://' + HOST + ':' + PORT + ' (pid=' + process.pid + ')');
 });
 
 process.on('uncaughtException', (e) => log('uncaught: ' + (e.stack || e)));

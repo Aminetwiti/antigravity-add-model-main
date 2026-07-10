@@ -23,6 +23,25 @@ const isProd = !isDev;
 let mainWindow = null;
 let tray = null;
 const activeStreams = new Map();
+// ─────────────────────────────────────────────────────────────────────────────
+// F-28 FIX — Single-instance lock: prevents two ag-doctor-ui windows from
+// running simultaneously (which causes CliWorkerPool race conditions).
+// ─────────────────────────────────────────────────────────────────────────────
+const gotLock = electron_1.app.requestSingleInstanceLock();
+if (!gotLock) {
+    // Another instance is already running — focus it and quit this one.
+    electron_1.app.quit();
+}
+else {
+    electron_1.app.on('second-instance', () => {
+        if (mainWindow) {
+            if (mainWindow.isMinimized())
+                mainWindow.restore();
+            mainWindow.show();
+            mainWindow.focus();
+        }
+    });
+}
 // Disable GPU sandbox in packaged builds to avoid startup crashes on some Windows setups
 electron_1.app.commandLine.appendSwitch('disable-gpu');
 electron_1.app.commandLine.appendSwitch('no-sandbox');
@@ -244,6 +263,9 @@ function createWindow() {
         }
     });
 }
+// IPC command timeout — renderer-side should also have a fallback, but this
+// ensures no promise leaks even if the renderer is destroyed.
+const WORKER_CMD_TIMEOUT_MS = 15_000;
 class CliWorkerPool {
     workers = [];
     maxWorkers = 3;
@@ -263,13 +285,20 @@ class CliWorkerPool {
         });
         const worker = { proc, busy: false, pending: null, buffer: '', errBuffer: '' };
         proc.stdout?.on('data', (chunk) => this.handleData(worker, chunk));
-        proc.stderr?.on('data', (chunk) => { worker.errBuffer += chunk.toString(); }); // don't mix into JSON protocol
+        // F-03/F-15: stderr goes to errBuffer only — never mixed into JSON protocol
+        proc.stderr?.on('data', (chunk) => {
+            worker.errBuffer += chunk.toString();
+            // Surface non-empty stderr in development so silent crashes are visible
+            if (isDev && worker.errBuffer.trim()) {
+                console.warn(`[pool:worker-${worker.proc.pid}] stderr:`, worker.errBuffer.slice(-500));
+            }
+        });
         proc.on('close', () => this.handleClose(worker));
         proc.on('error', (err) => this.handleError(worker, err));
         this.workers.push(worker);
         return worker;
     }
-    handleData(worker, chunk, _isStderr = false) {
+    handleData(worker, chunk) {
         worker.buffer += chunk.toString();
         // Newline-delimited JSON protocol
         let idx;
@@ -305,6 +334,18 @@ class CliWorkerPool {
         const idx = this.workers.indexOf(worker);
         if (idx >= 0)
             this.workers.splice(idx, 1);
+        // F-14 FIX: if there are queued commands but no live workers left and we
+        // can't spawn more (e.g. cliPath gone), drain the queue with rejections
+        // so no promise hangs indefinitely.
+        if (this.waitQueue.length > 0 && this.workers.length === 0 && !fs_1.default.existsSync(this.cliPath)) {
+            const err = new Error('CLI worker pool exhausted — no workers available');
+            for (const item of this.waitQueue) {
+                clearTimeout(item.timer);
+                item.reject(err);
+            }
+            this.waitQueue.length = 0;
+            return;
+        }
         this.dispatchNext();
     }
     handleError(worker, err) {
@@ -318,19 +359,48 @@ class CliWorkerPool {
         if (this.waitQueue.length === 0)
             return;
         const idle = this.workers.find((w) => !w.busy);
-        if (!idle)
+        if (!idle) {
+            // F-14 FIX: try to spawn a new worker for the queued item
+            if (this.workers.length < this.maxWorkers) {
+                const w = this.spawnWorker();
+                if (w) {
+                    const next = this.waitQueue.shift();
+                    clearTimeout(next.timer);
+                    this.runOn(w, next.args).then(next.resolve).catch(next.reject);
+                }
+            }
             return;
+        }
         const next = this.waitQueue.shift();
+        clearTimeout(next.timer);
         this.runOn(idle, next.args).then(next.resolve).catch(next.reject);
     }
     async runOn(worker, args) {
         return new Promise((resolve, reject) => {
             worker.busy = true;
-            worker.pending = { resolve, reject };
+            // F-14 FIX: per-command timeout — if worker stops responding (hung/zombie)
+            // the promise still resolves within WORKER_CMD_TIMEOUT_MS milliseconds.
+            const timer = setTimeout(() => {
+                if (worker.pending) {
+                    worker.pending = null;
+                    worker.busy = false;
+                    // Kill the stuck worker so handleClose can respawn
+                    try {
+                        worker.proc.kill();
+                    }
+                    catch { /* ignore */ }
+                    reject(new Error(`CLI worker timed out after ${WORKER_CMD_TIMEOUT_MS / 1000}s running: ${args.join(' ')}`));
+                }
+            }, WORKER_CMD_TIMEOUT_MS);
+            worker.pending = {
+                resolve: (val) => { clearTimeout(timer); resolve(val); },
+                reject: (err) => { clearTimeout(timer); reject(err); },
+            };
             try {
                 worker.proc.stdin?.write(JSON.stringify({ args }) + '\n');
             }
             catch (err) {
+                clearTimeout(timer);
                 worker.pending = null;
                 worker.busy = false;
                 reject(err);
@@ -343,21 +413,33 @@ class CliWorkerPool {
         }
         // Try to find an idle worker
         const idle = this.workers.find((w) => !w.busy);
-        if (idle) {
+        if (idle)
             return this.runOn(idle, args);
-        }
         // Spawn a new worker if under cap
         if (this.workers.length < this.maxWorkers) {
             const w = this.spawnWorker();
             if (w)
                 return this.runOn(w, args);
         }
-        // Queue
+        // F-14 FIX: queue the command with a hard timeout so it never hangs forever
         return new Promise((resolve, reject) => {
-            this.waitQueue.push({ args, resolve, reject });
+            const timer = setTimeout(() => {
+                const idx = this.waitQueue.findIndex((q) => q.timer === timer);
+                if (idx >= 0)
+                    this.waitQueue.splice(idx, 1);
+                reject(new Error(`CLI command timed out in queue after ${WORKER_CMD_TIMEOUT_MS / 1000}s: ${args.join(' ')}`));
+            }, WORKER_CMD_TIMEOUT_MS);
+            this.waitQueue.push({ args, resolve, reject, timer });
         });
     }
     shutdown() {
+        // F-14 FIX: drain queue with rejections before killing workers
+        const shutdownErr = new Error('Worker pool is shutting down');
+        for (const item of this.waitQueue) {
+            clearTimeout(item.timer);
+            item.reject(shutdownErr);
+        }
+        this.waitQueue.length = 0;
         for (const w of this.workers) {
             try {
                 w.proc.stdin?.end();
@@ -369,7 +451,6 @@ class CliWorkerPool {
             catch { /* ignore */ }
         }
         this.workers = [];
-        this.waitQueue.length = 0;
     }
 }
 let cliPool = null;
@@ -473,6 +554,346 @@ electron_1.ipcMain.handle('ag:antigravity:restart', async () => {
         return { ok: true, data: { ok: r.code === 0, message: r.stdout.trim() } };
     }
 });
+electron_1.ipcMain.handle('ag:detect-installation', async () => {
+    const candidates = [];
+    const isWin = process.platform === 'win32';
+    // Common locations to scan
+    const searchPaths = isWin
+        ? [
+            { path: 'C:\\Program Files\\antigravity\\Antigravity.exe', version: 'v1.x' },
+            { path: 'C:\\Program Files\\Antigravity\\Antigravity.exe', version: 'v2.0+' },
+            { path: path_1.default.join(process.env.LOCALAPPDATA || '', 'Programs', 'antigravity', 'Antigravity.exe'), version: 'v1.x' },
+            { path: path_1.default.join(process.env.LOCALAPPDATA || '', 'Programs', 'Antigravity', 'Antigravity.exe'), version: 'v2.0+' },
+            { path: path_1.default.join(process.env.USERPROFILE || '', 'AppData', 'Local', 'Programs', 'antigravity', 'Antigravity.exe'), version: 'v1.x' },
+            { path: path_1.default.join(process.env.USERPROFILE || '', 'AppData', 'Local', 'Programs', 'Antigravity', 'Antigravity.exe'), version: 'v2.0+' },
+        ]
+        : [
+            { path: '/usr/local/bin/antigravity', version: 'v1.x' },
+            { path: '/opt/Antigravity/Antigravity', version: 'v2.0+' },
+            { path: path_1.default.join(process.env.HOME || '', '.local', 'bin', 'antigravity'), version: 'v1.x' },
+        ];
+    for (const sp of searchPaths) {
+        try {
+            if (!fs_1.default.existsSync(sp.path))
+                continue;
+            const stat = fs_1.default.statSync(sp.path);
+            candidates.push({
+                path: sp.path,
+                version: sp.version,
+                exists: true,
+                size: stat.size,
+                modified: stat.mtime.toISOString(),
+            });
+        }
+        catch { /* skip */ }
+    }
+    // Identify running processes on Windows via tasklist
+    if (isWin) {
+        try {
+            const { execSync } = require('child_process');
+            const out = execSync('tasklist /FI "IMAGENAME eq Antigravity.exe" /FO CSV /NH', { encoding: 'utf-8' });
+            const lines = out.trim().split('\n').filter((l) => l.includes('Antigravity'));
+            for (const line of lines) {
+                const m = line.match(/^"([^"]+)","(\d+)"/);
+                if (m) {
+                    const pid = parseInt(m[2], 10);
+                    const cand = candidates.find((c) => c.path.toLowerCase().includes('antigravity\\antigravity.exe'));
+                    if (cand)
+                        cand.process = { pid, name: m[1] };
+                }
+            }
+        }
+        catch { /* best effort */ }
+    }
+    // Check port 50999 ownership
+    try {
+        const inUse = await isPortInUse(50999);
+        if (inUse) {
+            const { execSync } = require('child_process');
+            const out = execSync(`netstat -ano | findstr :50999`, { encoding: 'utf-8' });
+            const line = out.trim().split('\n')[0] || '';
+            const m = line.match(/\s(\d+)\s*$/);
+            const pid = m ? m[1] : 'unknown';
+            // Attach to first candidate that has a process, or create a generic note
+            const target = candidates.find((c) => c.process) || candidates[0];
+            if (target)
+                target.portInUse = { port: 50999, by: `PID ${pid}` };
+        }
+    }
+    catch { /* best effort */ }
+    // Recommendation: prefer v2.0+ (uppercase) since that's the user's target
+    const v2 = candidates.find((c) => c.version === 'v2.0+');
+    if (v2) {
+        v2.recommended = true;
+        v2.reason = 'Latest Antigravity 2.0+ (uppercase)';
+    }
+    const v1 = candidates.find((c) => c.version === 'v1.x');
+    if (v1 && !v2) {
+        v1.recommended = true;
+        v1.reason = 'Only v1.x installation found';
+    }
+    return {
+        ok: true,
+        data: {
+            candidates,
+            hasConflict: candidates.length > 1,
+            summary: candidates.length === 0
+                ? 'No Antigravity installation detected'
+                : candidates.length === 1
+                    ? `Single installation: ${candidates[0].version}`
+                    : `Multiple installations detected (${candidates.length}) — possible confusion source`,
+        },
+    };
+});
+// ─────────────────────────────────────────────────────────────────────────────
+// Proxy Stats — lightweight polling endpoint for the Real-time Proxy Monitor
+// ─────────────────────────────────────────────────────────────────────────────
+const proxyStatsHistory = [];
+const PROXY_STATS_MAX = 60;
+electron_1.ipcMain.handle('ag:proxy-stats', async () => {
+    const start = Date.now();
+    try {
+        const result = await new Promise((resolve) => {
+            const req = require('http').request({ hostname: '127.0.0.1', port: STUB_PORT, path: '/health', method: 'GET', timeout: 2000 }, (res) => {
+                res.resume();
+                resolve({
+                    ok: true,
+                    latencyMs: Date.now() - start,
+                    stub: res.headers['x-proxy-stub'] === '1',
+                });
+            });
+            req.on('timeout', () => { req.destroy(); resolve({ ok: false, latencyMs: 0, stub: false, error: 'timeout' }); });
+            req.on('error', (err) => resolve({ ok: false, latencyMs: 0, stub: false, error: err.message }));
+            req.end();
+        });
+        proxyStatsHistory.push({ ts: Date.now(), latencyMs: result.latencyMs, ok: result.ok });
+        if (proxyStatsHistory.length > PROXY_STATS_MAX)
+            proxyStatsHistory.shift();
+        return {
+            ok: true,
+            data: {
+                current: result,
+                history: [...proxyStatsHistory],
+                uptime: proxyStatsHistory.length > 0 ? Date.now() - proxyStatsHistory[0].ts : 0,
+            },
+        };
+    }
+    catch (e) {
+        return { ok: false, error: e.message };
+    }
+});
+// ──────────────────────────────────────────���──────────────────────────────────
+// Model Test — tests a single model's connection from the main process
+// ─────────────────────────────────────────────────────────────────────────────
+electron_1.ipcMain.handle('ag:test-model', async (_evt, name) => {
+    try {
+        const r = await getCliPool().run(['models', 'test', name, '--json']);
+        try {
+            return { ok: true, data: JSON.parse(r.stdout) };
+        }
+        catch {
+            return { ok: r.code === 0, data: { ok: r.code === 0, message: r.stdout.trim() || r.stderr.trim() } };
+        }
+    }
+    catch (e) {
+        return { ok: false, error: e.message };
+    }
+});
+// ─────────────────────────────────────────────────────────────────────────────
+// Proxy stub lifecycle — portable emergency proxy on 127.0.0.1:51999
+// (Separate from main Antigravity proxy on 50999 to avoid port conflicts)
+// ───────────────────────────────────────────────────────────────────────��─────
+const STUB_PORT = 51999;
+/**
+ * Check if port 50999 (main Antigravity proxy) is already in use.
+ * Used to warn the user when ag-doctor-ui stub might conflict.
+ */
+async function isPortInUse(port, host = '127.0.0.1') {
+    return new Promise((resolve) => {
+        const net = require('net');
+        const tester = net.createServer()
+            .once('error', () => resolve(true))
+            .once('listening', () => tester.close(() => resolve(false)))
+            .listen(port, host);
+    });
+}
+/**
+ * Launch proxy-stub.js in a detached Node.js process.
+ * Works on any machine (no hardcoded paths).
+ * Returns { ok, pid?, error? }
+ */
+electron_1.ipcMain.handle('ag:proxy:start-stub', async () => {
+    try {
+        // Resolve the stub path relative to the project root (same dir as the CLI package.json)
+        const stubPath = path_1.default.join(getCliPath(), '..', '..', '..', 'proxy-stub.js');
+        const resolved = path_1.default.resolve(stubPath);
+        if (!fs_1.default.existsSync(resolved)) {
+            return { ok: false, error: `proxy-stub.js not found at ${resolved}` };
+        }
+        // Spawn detached so it survives if ag-doctor-ui is closed
+        const child = (0, child_process_1.spawn)(process.execPath, [resolved], {
+            env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', AG_STUB_PORT: String(STUB_PORT) },
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: true,
+        });
+        child.unref();
+        // Wait up to 3 s for the port to open
+        const deadline = Date.now() + 3000;
+        while (Date.now() < deadline) {
+            await new Promise((r) => setTimeout(r, 200));
+            const alive = await new Promise((resolve) => {
+                const req = require('http').request({ hostname: '127.0.0.1', port: STUB_PORT, path: '/health', method: 'GET', timeout: 1000 }, (res) => { res.resume(); resolve(true); });
+                req.on('error', () => resolve(false));
+                req.end();
+            });
+            if (alive)
+                return { ok: true, pid: child.pid, port: STUB_PORT };
+        }
+        return { ok: true, pid: child.pid, port: STUB_PORT, note: 'started but port not yet open' };
+    }
+    catch (e) {
+        return { ok: false, error: e.message };
+    }
+});
+/**
+ * Check proxy health and detect stub vs real proxy.
+ */
+electron_1.ipcMain.handle('ag:proxy:status', async () => {
+    try {
+        const result = await new Promise((resolve) => {
+            const started = Date.now();
+            const req = require('http').request({ hostname: '127.0.0.1', port: STUB_PORT, path: '/health', method: 'GET', timeout: 2000 }, (res) => {
+                res.resume();
+                resolve({
+                    ok: true,
+                    stub: res.headers['x-proxy-stub'] === '1',
+                    latencyMs: Date.now() - started,
+                    port: STUB_PORT,
+                });
+            });
+            req.on('timeout', () => { req.destroy(); resolve({ ok: false, stub: false, latencyMs: 0, port: STUB_PORT, error: 'timeout' }); });
+            req.on('error', (err) => resolve({ ok: false, stub: false, latencyMs: 0, port: STUB_PORT, error: err.message }));
+            req.end();
+        });
+        return { ok: true, data: result };
+    }
+    catch (e) {
+        return { ok: false, error: e.message };
+    }
+});
+/**
+ * Check if the main Antigravity proxy port (50999) is occupied.
+ * Useful to detect conflicts when launching Antigravity.
+ */
+electron_1.ipcMain.handle('ag:proxy:check-main-port', async () => {
+    try {
+        const MAIN_PORT = 50999;
+        const inUse = await isPortInUse(MAIN_PORT);
+        if (inUse) {
+            // Try to identify which process is using the port
+            let processInfo = 'unknown';
+            try {
+                if (process.platform === 'win32') {
+                    const { execSync } = require('child_process');
+                    const out = execSync(`netstat -ano | findstr :${MAIN_PORT}`, { encoding: 'utf-8' });
+                    processInfo = out.trim().split('\n')[0] || 'unknown';
+                }
+                else {
+                    const { execSync } = require('child_process');
+                    const out = execSync(`lsof -i :${MAIN_PORT} -P -n 2>/dev/null | tail -n +2 | head -n 1`, { encoding: 'utf-8' });
+                    processInfo = out.trim() || 'unknown';
+                }
+            }
+            catch {
+                /* best effort */
+            }
+            return { ok: true, inUse: true, port: MAIN_PORT, process: processInfo };
+        }
+        return { ok: true, inUse: false, port: MAIN_PORT };
+    }
+    catch (e) {
+        return { ok: false, error: e.message };
+    }
+});
+/**
+ * Kill the process occupying port 50999 (main Antigravity proxy).
+ * Use with caution — only kills processes we believe are conflicting.
+ */
+electron_1.ipcMain.handle('ag:proxy:kill-main-port', async () => {
+    try {
+        const MAIN_PORT = 50999;
+        const { exec } = require('child_process');
+        return await new Promise((resolve) => {
+            let cmd;
+            if (process.platform === 'win32') {
+                cmd = `for /f "tokens=5" %a in ('netstat -ano ^| findstr :${MAIN_PORT}') do taskkill /F /PID %a`;
+            }
+            else {
+                cmd = `lsof -ti :${MAIN_PORT} | xargs -r kill -9`;
+            }
+            exec(cmd, (err, stdout) => {
+                if (err) {
+                    resolve({ ok: false, error: err.message });
+                }
+                else {
+                    resolve({ ok: true, killed: stdout.trim() || 'no process found' });
+                }
+            });
+        });
+    }
+    catch (e) {
+        return { ok: false, error: e.message };
+    }
+});
+/**
+ * Run the repair-all script to self-elevate and fix the system proxy/CA.
+ */
+electron_1.ipcMain.handle('ag:repair:run', async () => {
+    try {
+        const isWin = process.platform === 'win32';
+        const scriptName = isWin ? 'repair-all.ps1' : 'repair-all.sh';
+        const scriptPath = electron_1.app.isPackaged
+            ? path_1.default.join(process.resourcesPath, scriptName)
+            : path_1.default.join(__dirname, '..', 'resources', scriptName);
+        if (!fs_1.default.existsSync(scriptPath)) {
+            return { ok: false, error: `Repair script not found at ${scriptPath}` };
+        }
+        const tempFile = isWin ? path_1.default.join(process.env.TEMP || '', 'ag-repair-result.json') : '/tmp/ag-repair-result.json';
+        if (fs_1.default.existsSync(tempFile))
+            fs_1.default.unlinkSync(tempFile);
+        await new Promise((resolve, reject) => {
+            let proc;
+            if (isWin) {
+                proc = (0, child_process_1.spawn)('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `Start-Process powershell.exe -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File "${scriptPath}"' -Verb RunAs -Wait -WindowStyle Hidden`], {
+                    windowsHide: true,
+                    stdio: 'ignore'
+                });
+            }
+            else {
+                proc = (0, child_process_1.spawn)('bash', [scriptPath], {
+                    stdio: 'ignore'
+                });
+            }
+            proc.on('close', (code) => {
+                if (code === 0)
+                    resolve();
+                else
+                    reject(new Error(`Repair script exited with code ${code}`));
+            });
+            proc.on('error', reject);
+        });
+        if (fs_1.default.existsSync(tempFile)) {
+            const data = JSON.parse(fs_1.default.readFileSync(tempFile, 'utf-8'));
+            fs_1.default.unlinkSync(tempFile);
+            return { ok: true, ...data };
+        }
+        return { ok: true, proxy: false, ca: false, error: 'Result file not found' };
+    }
+    catch (e) {
+        return { ok: false, error: e.message };
+    }
+});
 // Streaming for `logs -f` — uses one-shot spawn (long-lived process), with
 // chunk batching to avoid IPC flooding the renderer.
 electron_1.ipcMain.handle('ag:stream:start', (evt, args, streamId) => {
@@ -539,31 +960,34 @@ electron_1.ipcMain.handle('ag:stream:cancel', (_evt, streamId) => {
     return false;
 });
 // ─────────────────────────────────────────────────────────────────────────────
-electron_1.app.whenReady().then(() => {
-    createWindow();
-    createTray();
-    // Global shortcuts
-    mainWindow?.webContents.on('before-input-event', (_e, input) => {
-        if (input.control && input.key.toLowerCase() === 'r') {
-            mainWindow?.webContents.send('ag:run-doctor');
-        }
-        else if (input.control && input.key.toLowerCase() === 'l') {
-            mainWindow?.webContents.send('ag:navigate', 'logs');
-        }
-        else if (input.control && input.key.toLowerCase() === 'k') {
-            mainWindow?.webContents.send('ag:command-palette');
-        }
-        else if (input.control && input.key.toLowerCase() === ',') {
-            mainWindow?.webContents.send('ag:navigate', 'settings');
-        }
+// F-28: only proceed if we own the single-instance lock
+if (gotLock) {
+    electron_1.app.whenReady().then(() => {
+        createWindow();
+        createTray();
+        // Global shortcuts
+        mainWindow?.webContents.on('before-input-event', (_e, input) => {
+            if (input.control && input.key.toLowerCase() === 'r') {
+                mainWindow?.webContents.send('ag:run-doctor');
+            }
+            else if (input.control && input.key.toLowerCase() === 'l') {
+                mainWindow?.webContents.send('ag:navigate', 'logs');
+            }
+            else if (input.control && input.key.toLowerCase() === 'k') {
+                mainWindow?.webContents.send('ag:command-palette');
+            }
+            else if (input.control && input.key.toLowerCase() === ',') {
+                mainWindow?.webContents.send('ag:navigate', 'settings');
+            }
+        });
+        electron_1.app.on('activate', () => {
+            if (electron_1.BrowserWindow.getAllWindows().length === 0)
+                createWindow();
+            else
+                mainWindow?.show();
+        });
     });
-    electron_1.app.on('activate', () => {
-        if (electron_1.BrowserWindow.getAllWindows().length === 0)
-            createWindow();
-        else
-            mainWindow?.show();
-    });
-});
+}
 electron_1.app.on('window-all-closed', () => {
     for (const proc of activeStreams.values())
         proc.kill();

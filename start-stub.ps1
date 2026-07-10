@@ -5,6 +5,19 @@ if (-not $nodeCmd) { Write-Host 'node.exe not found in PATH' -ForegroundColor Re
 $nodeExe = $nodeCmd.Source
 Write-Host ("node.exe = " + $nodeExe) -ForegroundColor DarkGray
 
+# Portable paths — derived from $PSScriptRoot and $env:TEMP, never hardcoded.
+$ScriptDir = $PSScriptRoot
+$Stub = Join-Path $ScriptDir 'proxy-stub.js'
+$LogFile = Join-Path $env:TEMP 'ag-proxy-stub.log'
+$OutFile = Join-Path $env:TEMP 'ag-proxy-stub.out'
+$ErrFile = Join-Path $env:TEMP 'ag-proxy-stub.err'
+
+if (-not (Test-Path $Stub)) {
+  Write-Host ("proxy-stub.js not found at: " + $Stub) -ForegroundColor Red
+  Write-Host 'Run this script from the project root directory.' -ForegroundColor Yellow
+  exit 1
+}
+
 # Free port 50999
 Get-NetTCPConnection -LocalPort 50999 -State Listen -ErrorAction SilentlyContinue |
   ForEach-Object { Write-Host ("killing PID " + $_.OwningProcess + " on 50999"); Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
@@ -14,11 +27,12 @@ Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyCon
   ForEach-Object { Write-Host ("killing previous stub pid=" + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 1
 
-$stub = 'C:\Business\tools\solutions\antigravity-add-model-main\proxy-stub.js'
-Start-Process -FilePath $nodeExe -ArgumentList "`"$stub`"" -WindowStyle Hidden `
-  -RedirectStandardOutput 'C:\Users\Admin\AppData\Local\Temp\proxy-stub.out' `
-  -RedirectStandardError 'C:\Users\Admin\AppData\Local\Temp\proxy-stub.err'
+Start-Process -FilePath $nodeExe -ArgumentList "`"$Stub`"" -WindowStyle Hidden `
+  -RedirectStandardOutput $OutFile `
+  -RedirectStandardError $ErrFile
 Write-Host 'Stub launched.' -ForegroundColor Cyan
+Write-Host ("  stub=" + $Stub) -ForegroundColor DarkGray
+Write-Host ("  log =" + $LogFile) -ForegroundColor DarkGray
 
 Write-Host 'Waiting for 127.0.0.1:50999...' -ForegroundColor Cyan
 $ready = $false
@@ -33,10 +47,8 @@ for ($i = 1; $i -le 20; $i++) {
 }
 if (-not $ready) {
   Write-Host 'Port 50999 did NOT open. Logs:' -ForegroundColor Red
-  $lf = 'C:\Users\Admin\AppData\Local\Temp\proxy-stub.log'
-  if (Test-Path $lf) { Get-Content $lf }
-  $ef = 'C:\Users\Admin\AppData\Local\Temp\proxy-stub.err'
-  if (Test-Path $ef) { Get-Content $ef }
+  if (Test-Path $LogFile) { Get-Content $LogFile }
+  if (Test-Path $ErrFile) { Get-Content $ErrFile }
   exit 1
 }
 
@@ -47,7 +59,12 @@ try {
 
 Write-Host ''
 Write-Host '== ag-doctor doctor ==' -ForegroundColor Cyan
-& $nodeExe 'C:\Business\tools\solutions\antigravity-add-model-main\ag-doctor\bin\ag-doctor.js' doctor
+$agDoctor = Join-Path $ScriptDir 'ag-doctor\bin\ag-doctor.js'
+if (Test-Path $agDoctor) {
+  & $nodeExe $agDoctor doctor
+} else {
+  Write-Host ("ag-doctor not found at: " + $agDoctor) -ForegroundColor Yellow
+}
 
 Write-Host ''
-Write-Host '(Proxy stub log: C:\Users\Admin\AppData\Local\Temp\proxy-stub.log)' -ForegroundColor DarkGray
+Write-Host ('(Proxy stub log: ' + $LogFile + ')') -ForegroundColor DarkGray

@@ -10,6 +10,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
+import crypto from 'crypto';
 import { getPlatform } from './platform';
 import { ensureCa, readCa, getCaCertPath, CA_NAME } from './cert';
 import { probeWithProxy } from './probe';
@@ -36,6 +37,8 @@ export interface MitmStatus {
     path: string | null;
     fingerprint: string | null;
     installed: boolean;
+    expiresAt: string | null;
+    isExpired: boolean;
   };
   proxy: {
     host: string | null;
@@ -101,6 +104,23 @@ export async function getMitmStatus(port = DEFAULT_MITM_PORT): Promise<MitmStatu
     }
   }
 
+  let expiresAt: string | null = null;
+  let isExpired = false;
+  if (ca?.certPath && fs.existsSync(ca.certPath)) {
+    try {
+      const pem = fs.readFileSync(ca.certPath, 'utf8');
+      const x509 = new crypto.X509Certificate(pem);
+      expiresAt = x509.validTo;
+      isExpired = new Date(expiresAt).getTime() < Date.now();
+      if (isExpired) {
+        details.push(`WARNING: CA Certificate expired on ${expiresAt}`);
+        caInstalled = false; // Force re-install state if expired
+      }
+    } catch (e) {
+      // Ignore X509 parsing errors
+    }
+  }
+
   return {
     caExists: !!ca,
     caInstalled,
@@ -119,6 +139,8 @@ export async function getMitmStatus(port = DEFAULT_MITM_PORT): Promise<MitmStatu
       path: ca?.certPath ?? null,
       fingerprint: ca?.fingerprint ?? null,
       installed: caInstalled,
+      expiresAt,
+      isExpired,
     },
     proxy: {
       host: proxyHost,
@@ -145,10 +167,18 @@ export async function installCaCert(): Promise<{ ok: boolean; message: string }>
         const stderr = err.stderr ?? err.stdout ?? '';
         // Detect common admin-elevation issues
         if (/access is denied/i.test(stderr) || /0x80070005/i.test(stderr)) {
-          return {
-            ok: false,
-            message: `Failed to install CA: access denied. Run from an elevated (Administrator) PowerShell.`,
-          };
+          try {
+            await execFileAsync('powershell.exe', [
+              '-Command',
+              `Start-Process certutil -ArgumentList '-addstore -f ROOT "${ca.certPath}"' -Verb RunAs -Wait -WindowStyle Hidden`
+            ], { windowsHide: true });
+            return { ok: true, message: `CA installed via UAC (fingerprint: ${ca.fingerprint})` };
+          } catch (elevationErr) {
+            return {
+              ok: false,
+              message: `Failed to install CA: access denied and UAC elevation failed. Run from an elevated (Administrator) PowerShell.`,
+            };
+          }
         }
         if (/cannot find the file/i.test(stderr) || (/not found/i.test(stderr) && /certutil/i.test(stderr))) {
           return {
@@ -210,7 +240,24 @@ export async function setSystemProxy(host = '127.0.0.1', port = DEFAULT_MITM_POR
   const platform = getPlatform();
   try {
     if (platform === 'win32') {
-      await execFileAsync('netsh', ['winhttp', 'set', 'proxy', `proxy-server="${host}:${port}"`], { windowsHide: true });
+      try {
+        await execFileAsync('netsh', ['winhttp', 'set', 'proxy', `proxy-server="${host}:${port}"`], { windowsHide: true });
+      } catch (e) {
+        const err = e as Error & { stderr?: string; stdout?: string };
+        const stderr = err.stderr ?? err.stdout ?? '';
+        if (/access is denied/i.test(stderr) || /0x80070005/i.test(stderr) || /requires elevation/i.test(stderr) || /The requested operation requires elevation/i.test(stderr) || /You must be an administrator/i.test(stderr)) {
+          try {
+            await execFileAsync('powershell.exe', [
+              '-Command',
+              `Start-Process netsh -ArgumentList 'winhttp set proxy proxy-server="${host}:${port}"' -Verb RunAs -Wait -WindowStyle Hidden`
+            ], { windowsHide: true });
+            return { ok: true, message: `Proxy set to ${host}:${port} via UAC` };
+          } catch (elevationErr) {
+            return { ok: false, message: `Failed to set proxy: access denied and UAC elevation failed.` };
+          }
+        }
+        throw e;
+      }
     } else if (platform === 'darwin') {
       // Detect active network service
       const { stdout } = await execFileAsync('networksetup', ['-listallnetworkservices']);
@@ -246,7 +293,24 @@ export async function clearSystemProxy(): Promise<{ ok: boolean; message: string
   const platform = getPlatform();
   try {
     if (platform === 'win32') {
-      await execFileAsync('netsh', ['winhttp', 'reset', 'proxy'], { windowsHide: true });
+      try {
+        await execFileAsync('netsh', ['winhttp', 'reset', 'proxy'], { windowsHide: true });
+      } catch (e) {
+        const err = e as Error & { stderr?: string; stdout?: string };
+        const stderr = err.stderr ?? err.stdout ?? '';
+        if (/access is denied/i.test(stderr) || /0x80070005/i.test(stderr) || /requires elevation/i.test(stderr) || /The requested operation requires elevation/i.test(stderr) || /You must be an administrator/i.test(stderr)) {
+          try {
+            await execFileAsync('powershell.exe', [
+              '-Command',
+              `Start-Process netsh -ArgumentList 'winhttp reset proxy' -Verb RunAs -Wait -WindowStyle Hidden`
+            ], { windowsHide: true });
+            return { ok: true, message: `Proxy cleared via UAC` };
+          } catch (elevationErr) {
+            return { ok: false, message: `Failed to clear proxy: access denied and UAC elevation failed.` };
+          }
+        }
+        throw e;
+      }
     } else if (platform === 'darwin') {
       const { stdout } = await execFileAsync('networksetup', ['-listallnetworkservices']);
       const services = stdout.split('\n').filter((l) => l && !l.startsWith('An asterisk'));

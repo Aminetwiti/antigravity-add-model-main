@@ -47,6 +47,7 @@ exports.setIntentionalTermination = setIntentionalTermination;
 exports.startAndMonitorLanguageServer = startAndMonitorLanguageServer;
 exports.killLanguageServer = killLanguageServer;
 exports.setupLocalCertTrust = setupLocalCertTrust;
+const electron_log_1 = __importDefault(require("electron-log"));
 const child_process_1 = require("child_process");
 const electron_1 = require("electron");
 const shell_env_1 = require("shell-env");
@@ -180,6 +181,24 @@ function setupNodeModules(env, modules) {
     }
 }
 /**
+ * Kills any orphaned language_server processes.
+ */
+async function killZombieLanguageServers() {
+    return new Promise((resolve) => {
+        try {
+            if (process.platform === 'win32') {
+                (0, child_process_1.execFile)('taskkill', ['/F', '/IM', 'language_server.exe'], () => resolve());
+            }
+            else {
+                (0, child_process_1.execFile)('pkill', ['-f', 'language_server'], () => resolve());
+            }
+        }
+        catch {
+            resolve();
+        }
+    });
+}
+/**
  * Spawn the language server and resolve with a LanguageServerHandle once
  * the LS reports its HTTP port. Rejects on timeout or unexpected exit
  * during startup.
@@ -189,12 +208,17 @@ function setupNodeModules(env, modules) {
  */
 function startLanguageServer(port, csrf, headless) {
     return new Promise(async (resolve, reject) => {
+        electron_log_1.default.info('[LS] Cleaning up any zombie processes before startup...');
+        await killZombieLanguageServers();
         const logStream = fs.createWriteStream((0, paths_1.getLsLogPath)(), { flags: 'w' });
         let proxyPort;
         try {
+            electron_log_1.default.info('[LS] before startProxy');
             proxyPort = await (0, proxy_1.startProxy)();
+            electron_log_1.default.info('[LS] after startProxy, port: ' + proxyPort);
         }
         catch (err) {
+            electron_log_1.default.error('[LS] startProxy failed:', err);
             console.error('[LanguageServer] Failed to start local proxy:', err);
         }
         const apiServerUrl = proxyPort ? `http://localhost:${proxyPort}` : 'https://generativelanguage.googleapis.com';

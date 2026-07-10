@@ -63,6 +63,39 @@ function invalidateCache(prefix?: string): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// withTimeout — wraps a promise so it rejects after `ms` milliseconds.
+// F-14: prevents the UI from staying on "Loading…" forever if the IPC handler
+// never resolves (worker crash, network hang, etc.).
+// ─────────────────────────────────────────────────────────────────────────────
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${ms / 1000}s`));
+    }, ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// inflight guards — prevent concurrent loadX() calls from racing (F-21).
+// If a load is already running, return its existing promise.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const inflightLoads = new Map<string, Promise<void>>();
+
+function guardLoad(key: string, fn: () => Promise<void>): Promise<void> {
+  const existing = inflightLoads.get(key);
+  if (existing) return existing;
+  const p = fn().finally(() => inflightLoads.delete(key));
+  inflightLoads.set(key, p);
+  return p;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // requestIdleCallback wrapper (falls back to setTimeout)
 // Used for non-critical background work.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -140,6 +173,7 @@ interface AgAPI {
   antigravityLaunch(): Promise<{ ok: boolean; data?: { ok: boolean; pid?: number; message: string }; error?: string }>;
   antigravityKill(): Promise<{ ok: boolean; data?: { killed: number; message: string }; error?: string }>;
   antigravityRestart(): Promise<{ ok: boolean; data?: { ok: boolean; message: string; pid?: number }; error?: string }>;
+  repairRun(): Promise<{ ok: boolean; proxy?: boolean; ca?: boolean; error?: string }>;
 }
 
 interface Window {
@@ -188,6 +222,8 @@ interface MitmStatus {
     path: string | null;
     fingerprint: string | null;
     installed: boolean;
+    expiresAt?: string | null;
+    isExpired?: boolean;
   };
   proxy: {
     host: string | null;
@@ -200,7 +236,7 @@ interface MitmStatus {
   };
 }
 
-type ObjectiveKey = 'antigravity' | 'mitm' | 'doctor' | 'patch' | 'logs';
+type ObjectiveKey = 'antigravity' | 'mitm' | 'doctor' | 'patch' | 'logs' | 'proxy';
 
 const OBJECTIVE_LABELS: Record<ObjectiveKey, string> = {
   antigravity: "Vérifier les statuts d'Antigravity et version",
@@ -208,6 +244,7 @@ const OBJECTIVE_LABELS: Record<ObjectiveKey, string> = {
   doctor: "Faire un diagnostic (Doctor)",
   patch: "Faire un repair (Réparer)",
   logs: "Afficher et suivre les logs",
+  proxy: "Démarrer/arrêter le proxy stub sur 50999",
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -598,6 +635,62 @@ $('#quickRunBtn').addEventListener('click', () => void runDoctor());
 $('#refreshBtn').addEventListener('click', () => void runDoctor());
 $('#repairBtn').addEventListener('click', () => void runRepair());
 
+// Fix All: full auto-repair with admin elevation (UAC prompt will appear)
+$('#fixAllBtn')?.addEventListener('click', () => void runFixAll());
+
+// Start Stub: emergency proxy stub on port 50999 (no admin needed)
+$('#startStubBtn')?.addEventListener('click', () => void runStartStub());
+
+async function runFixAll(): Promise<void> {
+  const ok = await confirmModal(
+    'Fix All — Réparation complète',
+    'Cela va lancer <code>ag-doctor repair --yes --auto-elevate</code> avec élévation admin (UAC). ' +
+    'Toutes les actions de réparation seront effectuées : patch, port 50999, proxy, CA cert.',
+    { confirmLabel: 'Fix All', danger: true },
+  );
+  if (!ok) return;
+  setStatus('Fix All — élévation admin…', 'busy');
+  $('#fixAllBtn')?.setAttribute('disabled', 'true');
+  try {
+    // Use the existing IPC handler that spawns the elevated repair script
+    const r = await window.ag.repairRun();
+    if (r?.ok) {
+      toast('Fix All completed successfully', 'ok', 5000);
+      setObjective('patch', 'ok', 'Réparation complète effectuée');
+    } else {
+      toast(`Fix All failed: ${r?.error ?? 'unknown'}`, 'err', 6000);
+      setObjective('patch', 'error', 'Échec de la réparation complète');
+    }
+    setStatus('Refreshing diagnostic…', 'busy');
+    await runDoctor();
+  } catch (e) {
+    toast(`Fix All error: ${(e as Error).message}`, 'err');
+    setStatus('Error', 'err');
+  } finally {
+    $('#fixAllBtn')?.removeAttribute('disabled');
+  }
+}
+
+async function runStartStub(): Promise<void> {
+  setStatus('Starting proxy stub…', 'busy');
+  $('#startStubBtn')?.setAttribute('disabled', 'true');
+  try {
+    const r = await window.ag.proxyStartStub();
+    if (r?.ok) {
+      toast(`Proxy stub started (pid=${r.pid ?? '?'})`, 'ok', 5000);
+      setObjective('proxy', 'ok', 'Stub proxy actif sur 50999');
+    } else {
+      toast(`Stub failed: ${r?.error ?? 'unknown'}`, 'err', 6000);
+      setObjective('proxy', 'error', 'Échec du stub');
+    }
+  } catch (e) {
+    toast(`Stub error: ${(e as Error).message}`, 'err');
+  } finally {
+    $('#startStubBtn')?.removeAttribute('disabled');
+    setStatus('Idle', 'ready');
+  }
+}
+
 // Reusable template for objective icons — avoids innerHTML on every doctor run
 const objectiveIconTpl = document.createElement('template');
 
@@ -973,12 +1066,17 @@ const mitmStatusEl = $('#mitmStatus') as HTMLDivElement;
 const mitmTpl = document.createElement('template');
 
 async function loadMitmStatus(): Promise<void> {
-  setStatus('Loading MITM status…', 'busy');
-  showSkeleton(mitmStatusEl, 'cards', 3);
-  try {
-    const r = await window.ag.run(['mitm', 'status', '--json']);
+  return guardLoad('mitm', async () => {
+    setStatus('Loading MITM status…', 'busy');
+    showSkeleton(mitmStatusEl, 'cards', 3);
+    try {
+      const r = await withTimeout(
+        window.ag.run(['mitm', 'status', '--json']),
+        12_000,
+        'mitm status',
+      );
     const s = JSON.parse(r.stdout) as MitmStatus;
-    const caBanner = s.ca.installed
+    const caBanner = s.ca.installed && !s.ca.isExpired
       ? `<div class="patch-banner ok">
            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
            <div class="patch-banner-body">
@@ -989,8 +1087,8 @@ async function loadMitmStatus(): Promise<void> {
       : `<div class="patch-banner warn">
            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
            <div class="patch-banner-body">
-             <div class="patch-banner-title">CA certificate not installed</div>
-             <div class="patch-banner-text">Install the CA to avoid TLS errors in intercepted applications.</div>
+             <div class="patch-banner-title">${s.ca.isExpired ? 'CA certificate expired' : 'CA certificate not installed'}</div>
+             <div class="patch-banner-text">${s.ca.isExpired ? 'The certificate has expired. Use Repair All to regenerate it.' : 'Install the CA to avoid TLS errors in intercepted applications.'}</div>
            </div>
          </div>`;
 
@@ -1032,6 +1130,7 @@ async function loadMitmStatus(): Promise<void> {
           <div class="mitm-card-header"><h3>CA Certificate</h3><span class="badge ${s.ca.installed ? 'ok' : 'warn'}">${s.ca.installed ? 'installed' : 'not installed'}</span></div>
           <div class="mitm-card-body">
             <div class="patch-row"><div class="patch-row-label">Generated</div><div class="patch-row-value ${s.ca.generated ? 'ok' : ''}">${s.ca.generated ? 'yes' : 'no'}</div></div>
+            <div class="patch-row"><div class="patch-row-label">Expires</div><div class="patch-row-value ${s.ca.isExpired ? 'err' : ''}">${escapeHtml(s.ca.expiresAt ?? '—')}</div></div>
             <div class="patch-row"><div class="patch-row-label">Path</div><div class="patch-row-value">${escapeHtml(s.ca.path ?? '—')}</div></div>
             <div class="patch-row"><div class="patch-row-label">Fingerprint</div><div class="patch-row-value">${escapeHtml(s.ca.fingerprint ?? '—')}</div></div>
           </div>
@@ -1053,8 +1152,38 @@ async function loadMitmStatus(): Promise<void> {
           </div>
           ${interceptionBanner}
         </div>
-      </div>`;
+      </div>
+      ${(!s.ca.installed || !s.proxy.redirected || !s.interception.reachable) ? `
+      <div style="margin-top: 20px; text-align: center;">
+        <button id="repair-all-btn" class="btn btn-primary" style="padding: 10px 20px; font-size: 14px;">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: text-bottom; margin-right: 6px;"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 9.36l-7.1 7.1a1 1 0 0 1-1.4 0l-2.8-2.8a1 1 0 0 1 0-1.4l7.1-7.1a6 6 0 0 1 9.36-7.94z"/></svg>
+          Repair All (Requires Admin)
+        </button>
+      </div>
+      ` : ''}`;
     mitmStatusEl.replaceChildren(mitmTpl.content);
+    
+    const repairBtn = document.getElementById('repair-all-btn');
+    if (repairBtn) {
+      repairBtn.addEventListener('click', async () => {
+        repairBtn.setAttribute('disabled', 'true');
+        repairBtn.innerHTML = 'Repairing... Please check UAC prompt.';
+        setStatus('Repairing MITM...', 'busy');
+        try {
+          const res = await window.ag.repairRun();
+          if (res.ok) {
+            toast('Repair script completed successfully.', 'ok', 5000);
+          } else {
+            toast('Repair failed: ' + res.error, 'err', 6000);
+          }
+        } catch (err) {
+          toast('Repair IPC error: ' + (err as Error).message, 'err', 6000);
+        } finally {
+          void loadMitmStatus();
+        }
+      });
+    }
+
     setStatus('Ready');
   } catch (e) {
     mitmStatusEl.innerHTML = `<div class="empty-state"><p>Error: ${escapeHtml((e as Error).message)}</p></div>`;
@@ -1062,6 +1191,7 @@ async function loadMitmStatus(): Promise<void> {
   } finally {
     hideSkeleton(mitmStatusEl);
   }
+  });
 }
 
 async function mitmAction(args: string[], successMsg: string, refresh = true): Promise<void> {
@@ -1097,10 +1227,15 @@ const patchStatusEl = $('#patchStatus') as HTMLDivElement;
 const patchTpl = document.createElement('template');
 
 async function loadPatchStatus(): Promise<void> {
-  setStatus('Loading patch status…', 'busy');
-  showSkeleton(patchStatusEl, 'lines', 5);
-  try {
-    const r = await window.ag.run(['patch', 'status', '--json']);
+  return guardLoad('patch', async () => {
+    setStatus('Loading patch status…', 'busy');
+    showSkeleton(patchStatusEl, 'lines', 5);
+    try {
+      const r = await withTimeout(
+        window.ag.run(['patch', 'status', '--json']),
+        12_000,
+        'patch status',
+      );
     const s = JSON.parse(r.stdout) as PatchStatus;
     const banner =
       s.applied
@@ -1161,6 +1296,7 @@ async function loadPatchStatus(): Promise<void> {
   } finally {
     hideSkeleton(patchStatusEl);
   }
+  });
 }
 
 $('#patchApplyBtn').addEventListener('click', async () => {
@@ -1463,16 +1599,17 @@ agRevealBtn.addEventListener('click', async () => {
 });
 
 async function loadAntigravityStatus(): Promise<void> {
-  setStatus('Loading Antigravity status…', 'busy');
-  setAgHero('busy', 'Checking…', 'Detecting installation');
-  try {
-    // Parallel: info IPC, status IPC, version IPC, models count
-    const [info, statusResult, versionResult, modelsResult] = await Promise.all([
-      memo('info', 5_000, () => window.ag.info()),
-      window.ag.antigravityStatus().catch((err: Error) => ({ ok: false, data: undefined, error: err.message })),
-      window.ag.antigravityVersion().catch((err: Error) => ({ ok: false, data: undefined, error: err.message })),
-      window.ag.run(['models', 'list', '--json']).catch(() => ({ stdout: '{"models":[]}', stderr: '', code: 0 })),
-    ]);
+  return guardLoad('agStatus', async () => {
+    setStatus('Loading Antigravity status…', 'busy');
+    setAgHero('busy', 'Checking…', 'Detecting installation');
+    try {
+      // Parallel: info IPC, status IPC, version IPC, models count
+      const [info, statusResult, versionResult, modelsResult] = await Promise.all([
+        memo('info', 5_000, () => window.ag.info()),
+        withTimeout(window.ag.antigravityStatus(), 10_000, 'antigravity status').catch((err: Error) => ({ ok: false, data: undefined, error: err.message })),
+        withTimeout(window.ag.antigravityVersion(), 10_000, 'antigravity version').catch((err: Error) => ({ ok: false, data: undefined, error: err.message })),
+        withTimeout(window.ag.run(['models', 'list', '--json']), 10_000, 'models list').catch(() => ({ stdout: '{"models":[]}', stderr: '', code: 0 })),
+      ]);
 
     const status = statusResult.ok ? (statusResult.data as Record<string, unknown>) : null;
     const versionData = versionResult.ok ? versionResult.data : null;
@@ -1534,6 +1671,7 @@ async function loadAntigravityStatus(): Promise<void> {
     infoTable.innerHTML = `<div class="empty-state"><p>Error: ${escapeHtml((e as Error).message)}</p></div>`;
     setStatus('Error', 'err');
   }
+  });
 }
 
 // Backward compat alias
@@ -1844,20 +1982,22 @@ function renderAntigravity(s: AntigravityStatus): void {
 }
 
 async function loadAntigravity(): Promise<void> {
-  setStatus('Loading Antigravity status…', 'busy');
-  try {
-    const r = await window.ag.antigravityStatus();
-    if (!r.ok || !r.data) {
-      toast(`Antigravity: ${r.error ?? 'unknown error'}`, 'err');
+  return guardLoad('ag', async () => {
+    setStatus('Loading Antigravity status…', 'busy');
+    try {
+      const r = await withTimeout(window.ag.antigravityStatus(), 10_000, 'antigravity status');
+      if (!r.ok || !r.data) {
+        toast(`Antigravity: ${r.error ?? 'unknown error'}`, 'err');
+        setStatus('Ready');
+        return;
+      }
+      renderAntigravity(r.data as AntigravityStatus);
       setStatus('Ready');
-      return;
+    } catch (e) {
+      toast(`Error: ${(e as Error).message}`, 'err');
+      setStatus('Error', 'err');
     }
-    renderAntigravity(r.data as AntigravityStatus);
-    setStatus('Ready');
-  } catch (e) {
-    toast(`Error: ${(e as Error).message}`, 'err');
-    setStatus('Error', 'err');
-  }
+  });
 }
 
 $('#agRefreshBtn').addEventListener('click', () => void loadAntigravity());

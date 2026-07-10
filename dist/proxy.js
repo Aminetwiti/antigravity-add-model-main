@@ -50,6 +50,96 @@ const dns = __importStar(require("dns"));
 const electron_log_1 = __importDefault(require("electron-log"));
 let server = null;
 let proxyPort = 0;
+const constants_1 = require("./constants");
+// ─── Module Imports ───────────────────────────────────────────────────────
+// Shared cross-turn state
+const shared_1 = require("./proxy/shared");
+// Model configuration & capability detection
+const modelUtils_1 = require("./proxy/modelUtils");
+// Provider translator registry (auto-discovers translators from proxy/translators/)
+const registry = __importStar(require("./proxy/registry"));
+// Protobuf injection (extracted from proxy.ts)
+const protoInjector_1 = require("./proxy/protoInjector");
+// Custom model loading (extracted from proxy.ts)
+const modelLoader_1 = require("./proxy/modelLoader");
+// URL construction for custom model requests (extracted from proxy.ts)
+const urlBuilder_1 = require("./proxy/urlBuilder");
+// ID generation (extracted from proxy.ts)
+const idGenerator_1 = require("./proxy/idGenerator");
+Object.defineProperty(exports, "generateModelPlaceholderId", { enumerable: true, get: function () { return idGenerator_1.generateModelPlaceholderId; } });
+Object.defineProperty(exports, "toSlug", { enumerable: true, get: function () { return idGenerator_1.toSlug; } });
+// ─── DNS bypass for upstream forwarding ───────────────────────────────────
+// The local network stack (hosts file / DNS) redirects Google Cloud Code
+// endpoints to 127.0.0.1 so the Electron app talks to this proxy. When the
+// proxy forwards upstream, we must NOT use that redirect or we connect to
+// ourselves. We use a dedicated Resolver pointed at public DNS servers, which
+// ignores both the hosts file and the local poisoned DNS.
+const googleDnsResolver = new dns.Resolver();
+googleDnsResolver.setServers(constants_1.PUBLIC_DNS_SERVERS);
+async function resolveGoogleIp(hostname) {
+    return new Promise((resolve, reject) => {
+        if (!hostname.endsWith('.googleapis.com')) {
+            dns.lookup(hostname, { family: 4 }, (err, address) => {
+                if (err || !address) {
+                    reject(err || new Error(`Could not resolve ${hostname}`));
+                }
+                else {
+                    resolve(address);
+                }
+            });
+            return;
+        }
+        // Public DNS can be unreachable on some networks/corporate firewalls.
+        // Cap the attempt at 5 seconds so the LS's own 10s deadline isn't blown.
+        let timedOut = false;
+        const timeout = setTimeout(() => {
+            timedOut = true;
+            electron_log_1.default.warn(`[Proxy] Public DNS timed out for ${hostname}, falling back to system DNS resolver`);
+            fallbackToSystemDns(hostname, resolve, reject);
+        }, 5000);
+        googleDnsResolver.resolve4(hostname, (err, addresses) => {
+            if (timedOut)
+                return;
+            clearTimeout(timeout);
+            if (err || !addresses || addresses.length === 0) {
+                electron_log_1.default.warn(`[Proxy] Public DNS failed for ${hostname}, falling back to system DNS resolver:`, err?.message);
+                fallbackToSystemDns(hostname, resolve, reject);
+                return;
+            }
+            const ip = addresses[0];
+            if (!ip || typeof ip !== 'string') {
+                electron_log_1.default.error(`[Proxy] Public DNS returned invalid address for ${hostname}:`, addresses);
+                fallbackToSystemDns(hostname, resolve, reject);
+                return;
+            }
+            electron_log_1.default.info(`[Proxy] resolveGoogleIp using ${ip} for ${hostname}`);
+            resolve(ip);
+        });
+    });
+}
+/**
+ * Fallback DNS resolver for googleapis.com that bypasses the hosts file.
+ * We MUST NOT use dns.lookup here because the hosts file redirects
+ * *.googleapis.com to 127.0.0.1. dns.resolve4 uses the network DNS directly,
+ * ignoring the hosts file, so it returns the real Google IP.
+ */
+function fallbackToSystemDns(hostname, resolve, reject) {
+    dns.resolve4(hostname, (err, addresses) => {
+        if (err || !addresses || addresses.length === 0) {
+            electron_log_1.default.error(`[Proxy] System DNS resolver failed for ${hostname}:`, err?.message);
+            reject(err || new Error(`Could not resolve ${hostname}`));
+            return;
+        }
+        const ip = addresses[0];
+        if (!ip || typeof ip !== 'string') {
+            electron_log_1.default.error(`[Proxy] System DNS returned invalid address for ${hostname}:`, addresses);
+            reject(new Error(`Invalid address for ${hostname}`));
+            return;
+        }
+        electron_log_1.default.info(`[Proxy] resolveGoogleIp using system DNS ${ip} for ${hostname}`);
+        resolve(ip);
+    });
+}
 // ─── Safe Response Helpers ─────────────────────────────────────────────────
 // Guard flag pattern to prevent ERR_HTTP_HEADERS_SENT when timeout and
 // upstream response race. Returns true if the operation succeeded, false if
@@ -80,76 +170,8 @@ function safeEnd(res, data) {
         return false;
     }
 }
-function safeWrite(res, chunk) {
-    if (res.writableEnded || res.destroyed) {
-        return false;
-    }
-    try {
-        return res.write(chunk);
-    }
-    catch (err) {
-        electron_log_1.default.warn('[Proxy] safeWrite failed:', err.message);
-        return false;
-    }
-}
-const constants_1 = require("./constants");
-// ─── Module Imports ───────────────────────────────────────────────────────
-// Shared cross-turn state
-const shared_1 = require("./proxy/shared");
-// Model configuration & capability detection
-const modelUtils_1 = require("./proxy/modelUtils");
-// Provider translator registry (auto-discovers translators from proxy/translators/)
-const registry = __importStar(require("./proxy/registry"));
-// Protobuf injection (extracted from proxy.ts)
-const protoInjector_1 = require("./proxy/protoInjector");
-// Custom model loading (extracted from proxy.ts)
-const modelLoader_1 = require("./proxy/modelLoader");
-// URL construction for custom model requests (extracted from proxy.ts)
-const urlBuilder_1 = require("./proxy/urlBuilder");
-// ID generation (extracted from proxy.ts)
-var idGenerator_1 = require("./proxy/idGenerator");
-Object.defineProperty(exports, "generateModelPlaceholderId", { enumerable: true, get: function () { return idGenerator_1.generateModelPlaceholderId; } });
-Object.defineProperty(exports, "toSlug", { enumerable: true, get: function () { return idGenerator_1.toSlug; } });
-// ─── DNS bypass for upstream forwarding ───────────────────────────────────
-const googleDnsResolver = new dns.Resolver();
-googleDnsResolver.setServers(constants_1.PUBLIC_DNS_SERVERS);
-async function resolveGoogleIp(hostname) {
-    return new Promise((resolve, reject) => {
-        if (!hostname.endsWith('.googleapis.com')) {
-            dns.lookup(hostname, { family: 4 }, (err, address) => {
-                if (err || !address) {
-                    reject(err || new Error(`Could not resolve ${hostname}`));
-                }
-                else {
-                    resolve(address);
-                }
-            });
-            return;
-        }
-        googleDnsResolver.resolve4(hostname, (err, addresses) => {
-            if (err || !addresses || addresses.length === 0) {
-                electron_log_1.default.warn(`[Proxy] Public DNS failed for ${hostname}, falling back to system DNS:`, err?.message);
-                dns.lookup(hostname, { family: 4 }, (err2, address) => {
-                    if (err2 || !address) {
-                        reject(err2 || err || new Error(`Could not resolve ${hostname}`));
-                    }
-                    else {
-                        resolve(address);
-                    }
-                });
-                return;
-            }
-            const ip = addresses[0];
-            if (!ip || typeof ip !== 'string') {
-                electron_log_1.default.error(`[Proxy] Public DNS returned invalid address for ${hostname}:`, addresses);
-                reject(new Error(`Invalid address for ${hostname}`));
-                return;
-            }
-            electron_log_1.default.info(`[Proxy] resolveGoogleIp using ${ip} for ${hostname}`);
-            resolve(ip);
-        });
-    });
-}
+// ─── Model Helpers ────────────────────────────────────────────────────────
+// generateModelPlaceholderId and toSlug are now in ./proxy/idGenerator.ts (re-exported above)
 // ─── Google Proxy ─────────────────────────────────────────────────────────
 async function proxyToGoogle(req, res, reqBody) {
     const isCloudCodeUrl = req.url.includes('v1internal') || req.url.includes('daily-cloudcode');
@@ -183,12 +205,13 @@ async function proxyToGoogle(req, res, reqBody) {
         headers: headers,
         servername: targetHost,
     };
+    // Guard flag to prevent ERR_HTTP_HEADERS_SENT when timeout and response race
+    const safeHead = (status, headers) => safeWriteHead(res, status, headers);
     const proxyReq = https.request(parsedUrl, options, (proxyRes) => {
-        // P0-5: Timeout for Google proxy requests (60s)
-        proxyReq.setTimeout(60000, () => {
-            electron_log_1.default.error('[Proxy] Google proxy request timed out after 60s');
+        proxyReq.setTimeout(constants_1.GOOGLE_PROXY_TIMEOUT_MS, () => {
+            electron_log_1.default.error(`[Proxy] Google proxy request timed out after ${constants_1.GOOGLE_PROXY_TIMEOUT_MS / 1000}s`);
             proxyReq.destroy();
-            if (safeWriteHead(res, 504, { 'Content-Type': 'application/json' })) {
+            if (safeHead(504, { 'Content-Type': 'application/json' })) {
                 safeEnd(res, JSON.stringify({ error: { message: 'Google API request timed out' } }));
             }
         });
@@ -217,6 +240,7 @@ async function proxyToGoogle(req, res, reqBody) {
                     text = fullResBody.toString('utf-8');
                 }
                 electron_log_1.default.info(`[Proxy] Response for ${req.url} (status: ${proxyRes.statusCode}, encoding: ${encoding}, length: ${text.length})`);
+                // P0-3: Response body content is NOT logged to disk. Only metadata.
                 const proxyHost = req.headers.host || 'localhost';
                 const proxyProto = proxyHost.endsWith('.googleapis.com') ? 'https:' : 'http:';
                 text = text.replace(/https:(\/\/)daily-cloudcode-pa\.googleapis\.com/g, `${proxyProto}$1${proxyHost}`);
@@ -233,7 +257,7 @@ async function proxyToGoogle(req, res, reqBody) {
             });
         }
         else {
-            if (safeWriteHead(res, proxyRes.statusCode || 200, proxyRes.headers)) {
+            if (safeHead(proxyRes.statusCode || 200, proxyRes.headers)) {
                 proxyRes.pipe(res);
             }
         }
@@ -263,6 +287,9 @@ async function resolveFileData(body, reqHeaders) {
             const fd = p.fileData;
             if (!fd?.fileUri)
                 continue;
+            // Keep image fileData intact so provider translators can map it natively.
+            if (fd.mimeType?.startsWith('image/'))
+                continue;
             try {
                 const uri = fd.fileUri;
                 let fileContent = '';
@@ -289,7 +316,7 @@ function downloadFileContent(url, authHeader) {
         const u = new URL(url);
         (u.protocol === 'https:' ? https : http).request({
             hostname: u.hostname, path: u.pathname + u.search,
-            method: 'GET', headers: { 'Authorization': authHeader }, timeout: 30000,
+            method: 'GET', headers: { 'Authorization': authHeader }, timeout: constants_1.FILE_DOWNLOAD_TIMEOUT_MS,
         }, (res) => {
             if (res.statusCode !== 200) {
                 reject(new Error('HTTP ' + res.statusCode));
@@ -327,6 +354,7 @@ function parseRetryAfter(headers) {
     return 0;
 }
 function handleCustomModelRequest(res, model, geminiBody, isStream, retryCount = 0) {
+    // P3-18: Configurable max retries per model (default 3, min 0, max 5)
     const MAX_RETRIES = (0, urlBuilder_1.resolveMaxRetries)(model);
     const REQUEST_TIMEOUT_MS = (0, urlBuilder_1.resolveRequestTimeout)(model);
     const provider = (0, urlBuilder_1.resolveProvider)(model);
@@ -342,6 +370,8 @@ function handleCustomModelRequest(res, model, geminiBody, isStream, retryCount =
         method: 'POST',
         headers: headers,
     };
+    // P0-2: SSL bypass ONLY when user explicitly opts in via allowUnauthorized.
+    // Custom providers no longer bypass SSL automatically.
     if (model.allowUnauthorized) {
         electron_log_1.default.warn(`[Proxy] SSL verification DISABLED for ${model.name} (allowUnauthorized=true). Connection is vulnerable to MITM.`);
         options.rejectUnauthorized = false;
@@ -358,6 +388,7 @@ function handleCustomModelRequest(res, model, geminiBody, isStream, retryCount =
             }
         });
         if (isStream) {
+            // Check for API errors BEFORE writing streaming headers
             if (apiRes.statusCode >= 400) {
                 let errorBody = '';
                 apiRes.on('data', (chunk) => errorBody += chunk.toString());
@@ -404,10 +435,11 @@ function handleCustomModelRequest(res, model, geminiBody, isStream, retryCount =
                                     traceId: '',
                                     metadata: {},
                                 };
-                                safeWrite(res, `data: ${JSON.stringify(cloudCodeResponse)}\n\n`);
+                                res.write(`data: ${JSON.stringify(cloudCodeResponse)}\n\n`);
                             }
                         }
                         catch (err) {
+                            // Partial/invalid JSON chunks are normal during streaming; debug-level only
                             electron_log_1.default.debug(`[Proxy] Stream chunk parse warning for ${model.name}:`, err.message);
                         }
                     }
@@ -426,7 +458,7 @@ function handleCustomModelRequest(res, model, geminiBody, isStream, retryCount =
                                     traceId: '',
                                     metadata: {},
                                 };
-                                safeWrite(res, `data: ${JSON.stringify(cloudCodeResponse)}\n\n`);
+                                res.write(`data: ${JSON.stringify(cloudCodeResponse)}\n\n`);
                             }
                         }
                         catch (e) {
@@ -447,14 +479,15 @@ function handleCustomModelRequest(res, model, geminiBody, isStream, retryCount =
                     traceId: '',
                     metadata: {},
                 };
-                safeWrite(res, `data: ${JSON.stringify(finalChunk)}\n\n`);
-                safeEnd(res);
+                res.write(`data: ${JSON.stringify(finalChunk)}\n\n`);
+                res.end();
             });
         }
         else {
             let body = '';
             apiRes.on('data', (chunk) => (body += chunk));
             apiRes.on('end', () => {
+                // Retry on 5xx with exponential backoff
                 if (apiRes.statusCode >= 500 && apiRes.statusCode < 600 && retryCount < MAX_RETRIES) {
                     const retryAfter = parseRetryAfter(apiRes.headers);
                     const delay = retryAfter > 0 ? retryAfter : 1000 * Math.pow(2, retryCount);
@@ -462,6 +495,7 @@ function handleCustomModelRequest(res, model, geminiBody, isStream, retryCount =
                     setTimeout(() => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1), delay);
                     return;
                 }
+                // Retry on 429 with Retry-After header support + exponential backoff
                 if (apiRes.statusCode === 429 && retryCount < MAX_RETRIES) {
                     const retryAfter = parseRetryAfter(apiRes.headers);
                     const delay = retryAfter > 0 ? retryAfter : 2000 * Math.pow(2, retryCount);
@@ -470,6 +504,7 @@ function handleCustomModelRequest(res, model, geminiBody, isStream, retryCount =
                     return;
                 }
                 if (apiRes.statusCode >= 400) {
+                    // P0-3: Only log status code and model name, NOT response body content
                     electron_log_1.default.error(`[Proxy] API error (${apiRes.statusCode}) for ${model.name}`);
                     if (safeWriteHead(res, apiRes.statusCode, { 'Content-Type': 'application/json' })) {
                         safeEnd(res, body);
@@ -545,7 +580,7 @@ function handleCustomModelRequest(res, model, geminiBody, isStream, retryCount =
                     traceId: '',
                     metadata: {},
                 };
-                safeWrite(res, 'data: ' + JSON.stringify(errResponse) + '\n\n');
+                res.write('data: ' + JSON.stringify(errResponse) + '\n\n');
             }
             safeEnd(res);
         }
@@ -587,6 +622,7 @@ function handleGetAvailableModelsProxy(res, reqBody, lsUrl) {
         const chunks = [];
         lsRes.on('data', (chunk) => chunks.push(chunk));
         lsRes.on('end', () => {
+            // Guard: timeout or error may have already terminated the response
             if (lsResErrored || res.headersSent || res.writableEnded) {
                 electron_log_1.default.debug('[Proxy] GetAvailableModels: skipping end handler (response terminated)');
                 return;
@@ -622,44 +658,34 @@ function handleGetAvailableModelsProxy(res, reqBody, lsUrl) {
 }
 // ─── Main Request Handler ─────────────────────────────────────────────────
 function handleRequest(req, res) {
-    // P2-1: Client disconnect safety. If the client aborts mid-request we must
-    // not write to `res` — Node will throw ERR_HTTP_HEADERS_SENT / ERR_STREAM_WRITE_AFTER_END.
-    let clientAborted = false;
-    const onAbort = () => {
-        clientAborted = true;
-        try { req.destroy(); } catch (_) { /* noop */ }
-    };
-    req.on('aborted', onAbort);
-    req.on('close', () => {
-        if (!res.writableEnded) {
-            clientAborted = true;
-        }
-    });
-    req.url = req.url.replace(/^.*\/dummy_path_padding/, '');
-    req.url = req.url.replace(/\/v1internal\/x{7}/, '');
+    // Health check — keep this FIRST so the LS sees a live port even if other
+    // initialization (padding strip, model loading, etc.) is delayed or fails.
     if (req.method === 'GET' && (req.url === '/health' || req.url === '/healthz')) {
+        electron_log_1.default.info(`[Proxy] /health hit from ${req.socket.remoteAddress || 'unknown'}`);
         const memUsage = process.memoryUsage();
-        if (safeWriteHead(res, 200, { 'Content-Type': 'application/json' })) {
-            safeEnd(res, JSON.stringify({
-                status: 'ok',
-                uptime: process.uptime(),
-                port: proxyPort,
-                memory: {
-                    rssMB: Math.round(memUsage.rss / 1024 / 1024),
-                    heapUsedMB: Math.round(memUsage.heapUsed / 1024 / 1024),
-                    heapTotalMB: Math.round(memUsage.heapTotal / 1024 / 1024),
-                },
-                state: {
-                    activeStreamContexts: shared_1.activeStreamContexts.size,
-                    modelToolCallIds: shared_1.modelToolCallIds.size,
-                    translatedToolCalls: shared_1.translatedToolCalls.size,
-                    modelReasoningContent: shared_1.modelReasoningContent.size,
-                },
-                timestamp: new Date().toISOString(),
-            }));
-        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            status: 'ok',
+            uptime: process.uptime(),
+            port: proxyPort,
+            memory: {
+                rssMB: Math.round(memUsage.rss / 1024 / 1024),
+                heapUsedMB: Math.round(memUsage.heapUsed / 1024 / 1024),
+                heapTotalMB: Math.round(memUsage.heapTotal / 1024 / 1024),
+            },
+            state: {
+                activeStreamContexts: shared_1.activeStreamContexts.size,
+                modelToolCallIds: shared_1.modelToolCallIds.size,
+                translatedToolCalls: shared_1.translatedToolCalls.size,
+                modelReasoningContent: shared_1.modelReasoningContent.size,
+            },
+            timestamp: new Date().toISOString(),
+        }));
         return;
     }
+    req.url = req.url.replace(/^.*\/dummy_path_padding/, '');
+    // Strip binary patch padding (from LS hostname replacement)
+    req.url = req.url.replace(/\/v1internal\/x{7}/, '');
     // P0-4: Enforce maximum request body size to prevent memory exhaustion DoS
     const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10 MB
     let bodyLength = 0;
@@ -684,10 +710,6 @@ function handleRequest(req, res) {
     req.on('end', async () => {
         if (bodyRejected)
             return;
-        if (clientAborted) {
-            electron_log_1.default.debug('[Proxy] Client aborted before handler dispatch');
-            return;
-        }
         const fullBody = Buffer.concat(bodyChunks);
         const bodyStr = fullBody.toString('utf-8');
         electron_log_1.default.info(`[Proxy] Request: ${req.method} ${req.url}`);
@@ -748,12 +770,12 @@ function handleRequest(req, res) {
                         const customModels = (0, modelLoader_1.loadCustomModels)();
                         const mappedCustom = {};
                         customModels.forEach((m) => {
-                            const slug = toSlug(m);
+                            const slug = (0, idGenerator_1.toSlug)(m);
                             mappedCustom[slug] = {
                                 displayName: m.displayName,
                                 maxTokens: 1048576,
                                 maxOutputTokens: 4096,
-                                model: generateModelPlaceholderId(m),
+                                model: (0, idGenerator_1.generateModelPlaceholderId)(m),
                                 apiProvider: 'API_PROVIDER_GOOGLE_GEMINI',
                                 modelProvider: 'MODEL_PROVIDER_GOOGLE',
                             };
@@ -780,7 +802,7 @@ function handleRequest(req, res) {
                                 const mapped = customModels.map((m) => {
                                     const cap = (0, modelUtils_1.detectModelCapabilities)(m, true);
                                     return {
-                                        name: 'models/' + generateModelPlaceholderId(m),
+                                        name: 'models/' + (0, idGenerator_1.generateModelPlaceholderId)(m),
                                         version: '1.0',
                                         displayName: m.displayName,
                                         description: m.description,
@@ -797,7 +819,7 @@ function handleRequest(req, res) {
                             else if (target && typeof target === 'object') {
                                 const result = { ...target };
                                 customModels.forEach((m) => {
-                                    const slug = toSlug(m);
+                                    const slug = (0, idGenerator_1.toSlug)(m);
                                     const cap = (0, modelUtils_1.detectModelCapabilities)(m, true);
                                     const entry = {
                                         displayName: m.displayName,
@@ -807,7 +829,7 @@ function handleRequest(req, res) {
                                         maxTokens: cap.maxTokens,
                                         maxOutputTokens: cap.maxOutputTokens,
                                         tokenizerType: 'LLAMA_WITH_SPECIAL',
-                                        model: generateModelPlaceholderId(m),
+                                        model: (0, idGenerator_1.generateModelPlaceholderId)(m),
                                         apiProvider: 'API_PROVIDER_GOOGLE_GEMINI',
                                         modelProvider: 'MODEL_PROVIDER_GOOGLE',
                                     };
@@ -853,7 +875,7 @@ function handleRequest(req, res) {
                                     }
                                     result[slug] = entry;
                                     m._slug = slug;
-                                    electron_log_1.default.info(`[Proxy] Custom model "${m.displayName}" => slug: ${slug} => model: ${generateModelPlaceholderId(m)} => thinking: ${cap.isThinking} => images: ${cap.supportsImages}`);
+                                    electron_log_1.default.info(`[Proxy] Custom model "${m.displayName}" => slug: ${slug} => model: ${(0, idGenerator_1.generateModelPlaceholderId)(m)} => thinking: ${cap.isThinking} => images: ${cap.supportsImages}`);
                                 });
                                 return result;
                             }
@@ -875,14 +897,14 @@ function handleRequest(req, res) {
                         if (!merged) {
                             const modelsMap = {};
                             customModels.forEach((m) => {
-                                const slug = toSlug(m);
+                                const slug = (0, idGenerator_1.toSlug)(m);
                                 modelsMap[slug] = {
                                     displayName: m.displayName,
                                     recommended: true,
                                     maxTokens: 1048576,
                                     maxOutputTokens: 4096,
                                     tokenizerType: 'LLAMA_WITH_SPECIAL',
-                                    model: generateModelPlaceholderId(m),
+                                    model: (0, idGenerator_1.generateModelPlaceholderId)(m),
                                     apiProvider: 'API_PROVIDER_GOOGLE_GEMINI',
                                     modelProvider: 'MODEL_PROVIDER_GOOGLE',
                                 };
@@ -909,6 +931,16 @@ function handleRequest(req, res) {
                                 });
                             }
                         }
+                        // P1: Strip Google's upstream error from the response. When Google
+                        // returns 401/403/etc., the proxy forwards that error object alongside
+                        // our injected custom models. The Antigravity frontend treats any
+                        // `error` key as a hard failure and hides the entire model list,
+                        // even though we successfully injected valid models. Removing the
+                        // error key lets the frontend render the merged model list normally.
+                        if (googleJson.error) {
+                            electron_log_1.default.warn(`[Proxy] fetchAvailableModels: stripping upstream error from response (status: ${googleRes.statusCode})`);
+                            delete googleJson.error;
+                        }
                         safeWriteHead(res, 200, { 'Content-Type': 'application/json' });
                         safeEnd(res, JSON.stringify(googleJson));
                     }
@@ -919,12 +951,12 @@ function handleRequest(req, res) {
                         const customModels = (0, modelLoader_1.loadCustomModels)();
                         const mappedCustom = {};
                         customModels.forEach((m) => {
-                            const slug = toSlug(m);
+                            const slug = (0, idGenerator_1.toSlug)(m);
                             mappedCustom[slug] = {
                                 displayName: m.displayName,
                                 maxTokens: 1048576,
                                 maxOutputTokens: 4096,
-                                model: generateModelPlaceholderId(m),
+                                model: (0, idGenerator_1.generateModelPlaceholderId)(m),
                                 apiProvider: 'API_PROVIDER_GOOGLE_GEMINI',
                                 modelProvider: 'MODEL_PROVIDER_GOOGLE',
                             };
@@ -940,12 +972,12 @@ function handleRequest(req, res) {
                     const customModels = (0, modelLoader_1.loadCustomModels)();
                     const mappedCustom = {};
                     customModels.forEach((m) => {
-                        const slug = toSlug(m);
+                        const slug = (0, idGenerator_1.toSlug)(m);
                         mappedCustom[slug] = {
                             displayName: m.displayName,
                             maxTokens: 1048576,
                             maxOutputTokens: 4096,
-                            model: generateModelPlaceholderId(m),
+                            model: (0, idGenerator_1.generateModelPlaceholderId)(m),
                             apiProvider: 'API_PROVIDER_GOOGLE_GEMINI',
                             modelProvider: 'MODEL_PROVIDER_GOOGLE',
                         };
@@ -1024,7 +1056,7 @@ function handleRequest(req, res) {
                         const googleJson = JSON.parse(googleBody);
                         const customModels = (0, modelLoader_1.loadCustomModels)();
                         const mappedCustom = customModels.map((m) => ({
-                            name: 'models/' + generateModelPlaceholderId(m),
+                            name: 'models/' + (0, idGenerator_1.generateModelPlaceholderId)(m),
                             version: '1.0',
                             displayName: m.displayName,
                             description: m.description,
@@ -1050,7 +1082,7 @@ function handleRequest(req, res) {
                             return;
                         const customModels = (0, modelLoader_1.loadCustomModels)();
                         const mappedCustom = customModels.map((m) => ({
-                            name: 'models/' + generateModelPlaceholderId(m),
+                            name: 'models/' + (0, idGenerator_1.generateModelPlaceholderId)(m),
                             version: '1.0',
                             displayName: m.displayName,
                             description: m.description,
@@ -1092,8 +1124,8 @@ function handleRequest(req, res) {
                 if (modelName) {
                     const customModels = (0, modelLoader_1.loadCustomModels)();
                     const matchedCustomModel = customModels.find((m) => {
-                        const enumName = generateModelPlaceholderId(m);
-                        return m.name === modelName || toSlug(m) === modelName || enumName === modelName || enumName === modelId;
+                        const enumName = (0, idGenerator_1.generateModelPlaceholderId)(m);
+                        return m.name === modelName || (0, idGenerator_1.toSlug)(m) === modelName || enumName === modelName || enumName === modelId;
                     });
                     if (matchedCustomModel) {
                         electron_log_1.default.info(`[Proxy] Intercepting Cloud Code generation for custom model: ${modelName} => ${matchedCustomModel.displayName}`);
@@ -1120,9 +1152,9 @@ function handleRequest(req, res) {
             const matchedModelName = isGenerate ? generateMatch[1] : streamMatch[1];
             const customModels = (0, modelLoader_1.loadCustomModels)();
             const matchedCustomModel = customModels.find((m) => {
-                const enumName = generateModelPlaceholderId(m);
+                const enumName = (0, idGenerator_1.generateModelPlaceholderId)(m);
                 return (m.name === matchedModelName ||
-                    toSlug(m) === matchedModelName ||
+                    (0, idGenerator_1.toSlug)(m) === matchedModelName ||
                     enumName === matchedModelName ||
                     'models/' + enumName === matchedModelName);
             });
@@ -1150,45 +1182,54 @@ function handleRequest(req, res) {
 // ─── Server Start/Stop ────────────────────────────────────────────────────
 function startProxy() {
     return new Promise((resolve, reject) => {
-        server = http.createServer(handleRequest);
-    // P2-1: Log socket-level errors instead of crashing the main process.
-    server.on('clientError', (err, socket) => {
-        electron_log_1.default.warn('[Proxy] clientError:', err && err.message);
         try {
-            if (socket && socket.writable) {
-                socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+            server = http.createServer(handleRequest);
+            // P2: Make port/host configurable via env vars so the proxy can be
+            // tuned per-machine without recompiling. Defaults preserve legacy behavior.
+            const envPort = parseInt(process.env.AG_PROXY_PORT || '', 10);
+            const defaultPort = Number.isFinite(envPort) && envPort > 0 ? envPort : 50999;
+            const defaultHost = process.env.AG_PROXY_HOST || '127.0.0.1';
+            let primaryPort = defaultPort;
+            let primaryHost = defaultHost;
+            function tryListen(port, host) {
+                server.listen(port, host, () => {
+                    proxyPort = server.address().port;
+                    electron_log_1.default.info(`[Proxy] Server listening on http://${host}:${proxyPort}`);
+                    // Execute cleanup initialization after the server is already listening
+                    // so that failures here don't prevent the port from binding.
+                    try {
+                        (0, shared_1.startCleanupInterval)();
+                    }
+                    catch (err) {
+                        electron_log_1.default.error('[Proxy] Failed to start cleanup interval:', err);
+                    }
+                    resolve(proxyPort);
+                });
             }
-        }
-        catch (_) { /* noop */ }
-    });
-    // P2-1: Guard against stray connection-level errors.
-    server.on('connection', (socket) => {
-        socket.on('error', (err) => {
-            electron_log_1.default.debug('[Proxy] socket error:', err && err.message);
-        });
-    });
-        // P1-9: Start managed cleanup interval
-        (0, shared_1.startCleanupInterval)();
-        let primaryPort = 50999;
-        function tryListen(port) {
-            server.listen(port, '127.0.0.1', () => {
-                proxyPort = server.address().port;
-                electron_log_1.default.info(`[Proxy] Server listening on http://127.0.0.1:${proxyPort}`);
-                resolve(proxyPort);
+            server.on('error', (err) => {
+                // Log full error details for diagnostics on new machines.
+                electron_log_1.default.error(`[Proxy] Server error: code=${err.code} message=${err.message} syscall=${err.syscall || ''} address=${err.address || ''} port=${err.port || ''}`);
+                if (err.code === 'EADDRINUSE' && primaryPort === defaultPort) {
+                    electron_log_1.default.warn(`[Proxy] Port ${defaultPort} is already in use. Retrying on dynamic port...`);
+                    primaryPort = 0;
+                    tryListen(0, primaryHost);
+                }
+                else if (err.code === 'EACCES') {
+                    // P2: Surface permission errors clearly instead of silently failing.
+                    electron_log_1.default.error(`[Proxy] Permission denied binding to ${primaryHost}:${primaryPort}. Try a different port (AG_PROXY_PORT) or run with sufficient privileges.`);
+                    reject(err);
+                }
+                else {
+                    electron_log_1.default.error('[Proxy] Startup failed:', err);
+                    reject(err);
+                }
             });
+            tryListen(primaryPort, primaryHost);
         }
-        server.on('error', (err) => {
-            if (err.code === 'EADDRINUSE' && primaryPort === 50999) {
-                electron_log_1.default.warn('[Proxy] Port 50999 is already in use. Retrying on dynamic port...');
-                primaryPort = 0;
-                tryListen(0);
-            }
-            else {
-                electron_log_1.default.error('[Proxy] Startup failed:', err);
-                reject(err);
-            }
-        });
-        tryListen(primaryPort);
+        catch (err) {
+            electron_log_1.default.error('[Proxy] Unexpected error during startProxy:', err);
+            reject(err);
+        }
     });
 }
 function stopProxy() {
