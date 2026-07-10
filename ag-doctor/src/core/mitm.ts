@@ -14,8 +14,32 @@ import crypto from 'crypto';
 import { getPlatform } from './platform';
 import { ensureCa, readCa, getCaCertPath, CA_NAME } from './cert';
 import { probeWithProxy } from './probe';
+import { runElevated } from './elevation';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Format an ElevatedResult as a user-friendly error string. We prefer the
+ * captured stderr (where Windows certutil/netsh put the useful diagnostic)
+ * and fall back to stdout / message in that order.
+ */
+function describe(r: { ok: boolean; message: string; stderr: string; stdout: string; code?: number; elevated?: boolean }): string {
+  const detail = (r.stderr || r.stdout || r.message || '').trim();
+  const text = detail.replace(/[.!?\s]+$/, '');
+  
+  // Add diagnostic context for common failures
+  if (r.code === 1 && !text && r.elevated) {
+    return 'UAC prompt was declined or the operation was cancelled';
+  }
+  if (r.code === 5) {
+    return 'Access denied (requires Administrator privileges)';
+  }
+  if (!text) {
+    return `Command failed with exit code ${r.code ?? 'unknown'}`;
+  }
+  
+  return text;
+}
 
 export const DEFAULT_MITM_PORT = 50999;
 
@@ -160,48 +184,55 @@ export async function installCaCert(): Promise<{ ok: boolean; message: string }>
   const platform = getPlatform();
   try {
     if (platform === 'win32') {
-      try {
-        await execFileAsync('certutil', ['-addstore', '-f', 'ROOT', ca.certPath], { windowsHide: true });
-      } catch (e) {
-        const err = e as Error & { stderr?: string; stdout?: string };
-        const stderr = err.stderr ?? err.stdout ?? '';
-        // Detect common admin-elevation issues
-        if (/access is denied/i.test(stderr) || /0x80070005/i.test(stderr)) {
-          try {
-            await execFileAsync('powershell.exe', [
-              '-Command',
-              `Start-Process certutil -ArgumentList '-addstore -f ROOT "${ca.certPath}"' -Verb RunAs -Wait -WindowStyle Hidden`
-            ], { windowsHide: true });
-            return { ok: true, message: `CA installed via UAC (fingerprint: ${ca.fingerprint})` };
-          } catch (elevationErr) {
-            return {
-              ok: false,
-              message: `Failed to install CA: access denied and UAC elevation failed. Run from an elevated (Administrator) PowerShell.`,
-            };
-          }
+      // `runElevated` checks `net session` first; if not elevated it spawns
+      // `Start-Process -Verb RunAs` which triggers a UAC prompt. This is
+      // more reliable than the previous try/catch-on-stderr pattern, because
+      // Windows does not always populate `err.stderr` on access-denied
+      // failures of certutil.exe.
+      console.log(`[DEBUG] Installing CA: ${ca.certPath}`);
+      console.log(`[DEBUG] Calling runElevated('certutil', ['-addstore', '-f', 'ROOT', '${ca.certPath}'])`);
+      
+      const r = await runElevated('certutil', ['-addstore', '-f', 'ROOT', ca.certPath]);
+      
+      console.log(`[DEBUG] runElevated result:`, {
+        ok: r.ok,
+        code: r.code,
+        elevated: r.elevated,
+        stderr: r.stderr.substring(0, 200),
+        stdout: r.stdout.substring(0, 200),
+        message: r.message
+      });
+      
+      if (!r.ok) {
+        // Defensive: surface a friendly message for the very common
+        // "certutil missing" case instead of an opaque OS error.
+        const text = (r.stderr + ' ' + r.stdout).toLowerCase();
+        if (text.includes('cannot find the file') || (text.includes('certutil') && text.includes('not found'))) {
+          return { ok: false, message: 'Failed to install CA: certutil.exe not found in PATH' };
         }
-        if (/cannot find the file/i.test(stderr) || (/not found/i.test(stderr) && /certutil/i.test(stderr))) {
-          return {
-            ok: false,
-            message: `Failed to install CA: certutil.exe not found in PATH.`,
-          };
-        }
-        return { ok: false, message: `Failed to install CA: ${stderr.trim() || err.message}` };
+        return { ok: false, message: `Failed to install CA: ${describe(r)}` };
       }
+      return {
+        ok: true,
+        message: r.elevated
+          ? `CA installed via UAC (fingerprint: ${ca.fingerprint})`
+          : `CA installed (fingerprint: ${ca.fingerprint})`,
+      };
     } else if (platform === 'darwin') {
-      await execFileAsync('sudo', [
-        'security',
+      const r = await runElevated('security', [
         'add-trusted-cert',
         '-d',
         '-r', 'trustRoot',
         '-k', '/Library/Keychains/System.keychain',
         ca.certPath,
       ]);
+      if (!r.ok) return { ok: false, message: `Failed to install CA: ${describe(r)}` };
     } else {
-      // Linux: copy to /usr/local/share/ca-certificates and update
+      // Linux: copy to /usr/local/share/ca-certificates and update.
       const dest = '/usr/local/share/ca-certificates/antigravity-mitm.crt';
       fs.copyFileSync(ca.certPath, dest);
-      await execFileAsync('sudo', ['update-ca-certificates']);
+      const r = await runElevated('update-ca-certificates', []);
+      if (!r.ok) return { ok: false, message: `Failed to install CA: ${describe(r)}` };
     }
     return { ok: true, message: `CA installed (fingerprint: ${ca.fingerprint})` };
   } catch (e) {
@@ -216,18 +247,20 @@ export async function uninstallCaCert(): Promise<{ ok: boolean; message: string 
   const platform = getPlatform();
   try {
     if (platform === 'win32') {
-      await execFileAsync('certutil', ['-delstore', 'ROOT', CA_NAME], { windowsHide: true });
+      const r = await runElevated('certutil', ['-delstore', 'ROOT', CA_NAME]);
+      if (!r.ok) return { ok: false, message: `Failed to remove CA: ${describe(r)}` };
     } else if (platform === 'darwin') {
-      await execFileAsync('sudo', [
-        'security',
+      const r = await runElevated('security', [
         'delete-certificate',
         '-c', CA_NAME,
         '/Library/Keychains/System.keychain',
       ]);
+      if (!r.ok) return { ok: false, message: `Failed to remove CA: ${describe(r)}` };
     } else {
       const dest = '/usr/local/share/ca-certificates/antigravity-mitm.crt';
       if (fs.existsSync(dest)) fs.unlinkSync(dest);
-      await execFileAsync('sudo', ['update-ca-certificates', '--fresh']);
+      const r = await runElevated('update-ca-certificates', ['--fresh']);
+      if (!r.ok) return { ok: false, message: `Failed to remove CA: ${describe(r)}` };
     }
     return { ok: true, message: 'CA removed' };
   } catch (e) {
@@ -240,26 +273,37 @@ export async function setSystemProxy(host = '127.0.0.1', port = DEFAULT_MITM_POR
   const platform = getPlatform();
   try {
     if (platform === 'win32') {
-      try {
-        await execFileAsync('netsh', ['winhttp', 'set', 'proxy', `proxy-server="${host}:${port}"`], { windowsHide: true });
-      } catch (e) {
-        const err = e as Error & { stderr?: string; stdout?: string };
-        const stderr = err.stderr ?? err.stdout ?? '';
-        if (/access is denied/i.test(stderr) || /0x80070005/i.test(stderr) || /requires elevation/i.test(stderr) || /The requested operation requires elevation/i.test(stderr) || /You must be an administrator/i.test(stderr)) {
-          try {
-            await execFileAsync('powershell.exe', [
-              '-Command',
-              `Start-Process netsh -ArgumentList 'winhttp set proxy proxy-server="${host}:${port}"' -Verb RunAs -Wait -WindowStyle Hidden`
-            ], { windowsHide: true });
-            return { ok: true, message: `Proxy set to ${host}:${port} via UAC` };
-          } catch (elevationErr) {
-            return { ok: false, message: `Failed to set proxy: access denied and UAC elevation failed.` };
-          }
-        }
-        throw e;
-      }
+      // `netsh winhttp set proxy` requires Admin. `runElevated` proactively
+      // detects elevation via `net session` and re-launches via UAC when
+      // needed. This is more reliable than the previous try/catch-on-stderr
+      // approach because the failure exit code is 1 with no useful stderr
+      // on Windows, so the regex fallback never matched.
+      console.log(`[DEBUG] Setting system proxy to ${host}:${port}`);
+      console.log(`[DEBUG] Calling runElevated('netsh', ['winhttp', 'set', 'proxy', 'proxy-server=${host}:${port}'])`);
+      
+      const r = await runElevated('netsh', [
+        'winhttp', 'set', 'proxy', `proxy-server=${host}:${port}`,
+      ]);
+      
+      console.log(`[DEBUG] runElevated result:`, {
+        ok: r.ok,
+        code: r.code,
+        elevated: r.elevated,
+        stderr: r.stderr.substring(0, 200),
+        stdout: r.stdout.substring(0, 200),
+        message: r.message
+      });
+      
+      if (!r.ok) return { ok: false, message: `Failed to set proxy: ${describe(r)}` };
+      return {
+        ok: true,
+        message: r.elevated
+          ? `Proxy set to ${host}:${port} via UAC`
+          : `Proxy set to ${host}:${port}`,
+      };
     } else if (platform === 'darwin') {
-      // Detect active network service
+      // Detect active network service (no elevation needed for `networksetup`
+      // when the current user owns the network service).
       const { stdout } = await execFileAsync('networksetup', ['-listallnetworkservices']);
       const services = stdout.split('\n').filter((l) => l && !l.startsWith('An asterisk'));
       for (const svc of services) {
@@ -293,24 +337,12 @@ export async function clearSystemProxy(): Promise<{ ok: boolean; message: string
   const platform = getPlatform();
   try {
     if (platform === 'win32') {
-      try {
-        await execFileAsync('netsh', ['winhttp', 'reset', 'proxy'], { windowsHide: true });
-      } catch (e) {
-        const err = e as Error & { stderr?: string; stdout?: string };
-        const stderr = err.stderr ?? err.stdout ?? '';
-        if (/access is denied/i.test(stderr) || /0x80070005/i.test(stderr) || /requires elevation/i.test(stderr) || /The requested operation requires elevation/i.test(stderr) || /You must be an administrator/i.test(stderr)) {
-          try {
-            await execFileAsync('powershell.exe', [
-              '-Command',
-              `Start-Process netsh -ArgumentList 'winhttp reset proxy' -Verb RunAs -Wait -WindowStyle Hidden`
-            ], { windowsHide: true });
-            return { ok: true, message: `Proxy cleared via UAC` };
-          } catch (elevationErr) {
-            return { ok: false, message: `Failed to clear proxy: access denied and UAC elevation failed.` };
-          }
-        }
-        throw e;
-      }
+      const r = await runElevated('netsh', ['winhttp', 'reset', 'proxy']);
+      if (!r.ok) return { ok: false, message: `Failed to clear proxy: ${describe(r)}` };
+      return {
+        ok: true,
+        message: r.elevated ? 'Proxy cleared via UAC' : 'Proxy cleared',
+      };
     } else if (platform === 'darwin') {
       const { stdout } = await execFileAsync('networksetup', ['-listallnetworkservices']);
       const services = stdout.split('\n').filter((l) => l && !l.startsWith('An asterisk'));

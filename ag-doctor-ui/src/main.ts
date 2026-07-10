@@ -13,6 +13,7 @@ import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, Notificati
 import path from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import fs from 'fs';
+import { getProxyManager } from './proxy-manager';
 
 const isDev = !app.isPackaged;
 const isProd = !isDev;
@@ -293,7 +294,17 @@ interface CliWorker {
 
 // IPC command timeout — renderer-side should also have a fallback, but this
 // ensures no promise leaks even if the renderer is destroyed.
-const WORKER_CMD_TIMEOUT_MS = 15_000;
+//
+// 60s instead of the old 15s for two reasons:
+//   1. `ag-doctor repair --yes` orchestrates a binary patch, process kill,
+//      proxy start (5s + 3s polling) and CA generation — easily 10-15s on
+//      a healthy machine and much longer on slow disks.
+//   2. `ag-doctor mitm install` / `mitm proxy-on` may block on a UAC
+//      consent dialog waiting for the user to click "Yes".
+// Fast commands like `mitm status` and `patch status` are bounded by
+// renderer-side `withTimeout(..., 12_000)` wrappers, so the larger worker
+// timeout does not delay their perceived failure.
+const WORKER_CMD_TIMEOUT_MS = 60_000;
 
 class CliWorkerPool {
   private workers: CliWorker[] = [];
@@ -546,6 +557,61 @@ ipcMain.handle('ag:open-external', async (_evt, url: string) => {
 ipcMain.handle('ag:reveal', async (_evt, p: string) => {
   shell.showItemInFolder(p);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MITM Proxy Server Management
+// ─────────────────────────────────────────────────────────────────────────────
+
+ipcMain.handle('ag:proxy:start', async () => {
+  console.log('[IPC] ag:proxy:start called');
+  try {
+    const proxyManager = getProxyManager();
+    const result = await proxyManager.start();
+    console.log('[IPC] ag:proxy:start result:', result);
+    return result;
+  } catch (err) {
+    console.error('[IPC] ag:proxy:start error:', err);
+    return { ok: false, message: `Failed to start proxy: ${(err as Error).message}` };
+  }
+});
+
+ipcMain.handle('ag:proxy:stop', async () => {
+  console.log('[IPC] ag:proxy:stop called');
+  try {
+    const proxyManager = getProxyManager();
+    const result = await proxyManager.stop();
+    console.log('[IPC] ag:proxy:stop result:', result);
+    return result;
+  } catch (err) {
+    console.error('[IPC] ag:proxy:stop error:', err);
+    return { ok: false, message: `Failed to stop proxy: ${(err as Error).message}` };
+  }
+});
+
+ipcMain.handle('ag:proxy:status', async () => {
+  try {
+    const proxyManager = getProxyManager();
+    const status = await proxyManager.getStatus();
+    return { ok: true, data: status };
+  } catch (err) {
+    console.error('[IPC] ag:proxy:status error:', err);
+    return { ok: false, error: (err as Error).message };
+  }
+});
+
+ipcMain.handle('ag:proxy:restart', async () => {
+  console.log('[IPC] ag:proxy:restart called');
+  try {
+    const proxyManager = getProxyManager();
+    const result = await proxyManager.restart();
+    console.log('[IPC] ag:proxy:restart result:', result);
+    return result;
+  } catch (err) {
+    console.error('[IPC] ag:proxy:restart error:', err);
+    return { ok: false, message: `Failed to restart proxy: ${(err as Error).message}` };
+  }
+});
+
 
 // Antigravity lifecycle: thin wrappers around the CLI's `antigravity` subcommand.
 // The CLI returns JSON when invoked with --json, so we forward the parsed payload.
@@ -828,34 +894,7 @@ ipcMain.handle('ag:proxy:start-stub', async () => {
   }
 });
 
-/**
- * Check proxy health and detect stub vs real proxy.
- */
-ipcMain.handle('ag:proxy:status', async () => {
-  try {
-    const result = await new Promise<{ ok: boolean; stub: boolean; latencyMs: number; port: number; error?: string }>((resolve) => {
-      const started = Date.now();
-      const req = require('http').request(
-        { hostname: '127.0.0.1', port: STUB_PORT, path: '/health', method: 'GET', timeout: 2000 },
-        (res: { statusCode: number; headers: Record<string, string>; resume: () => void }) => {
-          res.resume();
-          resolve({
-            ok: true,
-            stub: res.headers['x-proxy-stub'] === '1',
-            latencyMs: Date.now() - started,
-            port: STUB_PORT,
-          });
-        },
-      );
-      req.on('timeout', () => { req.destroy(); resolve({ ok: false, stub: false, latencyMs: 0, port: STUB_PORT, error: 'timeout' }); });
-      req.on('error', (err: Error) => resolve({ ok: false, stub: false, latencyMs: 0, port: STUB_PORT, error: err.message }));
-      req.end();
-    });
-    return { ok: true, data: result };
-  } catch (e) {
-    return { ok: false, error: (e as Error).message };
-  }
-});
+// NOTE: 'ag:proxy:status' handler is already registered above (line ~591) via proxyManager.getStatus().
 
 /**
  * Check if the main Antigravity proxy port (50999) is occupied.
@@ -1065,6 +1104,14 @@ app.on('window-all-closed', () => {
   for (const proc of activeStreams.values()) proc.kill();
   activeStreams.clear();
   cliPool?.shutdown();
+  
+  // Cleanup proxy server
+  try {
+    getProxyManager().cleanup();
+  } catch (err) {
+    console.error('[App] Failed to cleanup proxy manager:', err);
+  }
+  
   if (process.platform !== 'darwin') app.quit();
 });
 

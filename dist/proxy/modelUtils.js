@@ -6,6 +6,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.detectModelCapabilities = detectModelCapabilities;
 exports.detectModelCapabilitiesByName = detectModelCapabilitiesByName;
+exports.mapApiModelToModeConfig = mapApiModelToModeConfig;
 // ─── Detection ────────────────────────────────────────────────────────────
 const THINKING_PATTERN = /thinking|reasoning|reasoner|o1|o3|r1|opus-4|sonnet-4|claude-4|3-7|4-7|3\.7|4\.7/i;
 const DEEPSEEK_PATTERN = /deepseek/i;
@@ -50,6 +51,55 @@ function detectModelCapabilitiesByName(modelName) {
     return {
         isClaudeThinkingModel: CLAUDE_THINKING_PATTERN.test(lower),
         isThinkingModel: THINKING_MODEL_PATTERN.test(lower),
+    };
+}
+/**
+ * Maps a model from the /v1/models endpoint to a ModelModeConfig,
+ * detecting its reasoning/thinking capabilities dynamically.
+ */
+function mapApiModelToModeConfig(apiModel, provider) {
+    const id = apiModel.id;
+    const name = apiModel.name || id;
+    const lower = id.toLowerCase();
+    // Detect reasoning support from the model ID (not hardcoded)
+    const supportsReasoning = THINKING_PATTERN.test(id) ||
+        /o1|o3|r1|reasoning|thinking|reasoner/i.test(id);
+    // Map reasoning efforts based on model type
+    let supportedReasoningEfforts;
+    let supportedThinkingBudgets;
+    let defaultMode = 'auto';
+    if (/o1|o3|r1/i.test(id)) {
+        // OpenAI o1, o3, DeepSeek R1: support low/medium/high reasoning effort
+        supportedReasoningEfforts = ['low', 'medium', 'high'];
+        defaultMode = 'auto';
+    }
+    else if (/thinking|reasoning|reasoner/i.test(id)) {
+        // General thinking models: support auto/enabled/disabled
+        supportedThinkingBudgets = ['auto', 'enabled', 'disabled'];
+        defaultMode = 'auto';
+    }
+    else if (/claude|opus|sonnet/i.test(id)) {
+        // Claude: support auto/enabled/disabled
+        supportedThinkingBudgets = ['auto', 'enabled', 'disabled'];
+        defaultMode = 'auto';
+    }
+    else {
+        // Non-thinking models: no reasoning effort, default to 'none'
+        supportedReasoningEfforts = undefined;
+        supportedThinkingBudgets = undefined;
+        defaultMode = 'non-thinking';
+    }
+    return {
+        id,
+        name,
+        provider,
+        supportsReasoning,
+        supportsImages: IMAGE_SUPPORT_PATTERN.test(id) && !NO_IMAGE_PATTERN.test(id),
+        maxOutputTokens: supportsReasoning ? 32768 : 16384,
+        maxTokens: 1048576,
+        supportedReasoningEfforts,
+        supportedThinkingBudgets,
+        defaultMode,
     };
 }
 //# sourceMappingURL=modelUtils.js.map

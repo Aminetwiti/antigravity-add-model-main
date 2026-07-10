@@ -44,6 +44,12 @@ interface StorageAPI {
         error?: string;
     }>;
     testModelConnection: (model: TestModelParams) => Promise<ConnectionTestResult>;
+    fetchModels: (params: {
+        apiUrl: string;
+        provider: string;
+        apiKey?: string;
+        allowUnauthorized?: boolean;
+    }) => Promise<FetchModelsResult>;
 }
 interface LogsAPI {
     getElectronLogs: () => Promise<string>;
@@ -86,6 +92,26 @@ interface CustomModelEntry {
     externalModelName: string;
     allowUnauthorized?: boolean;
     encrypted?: boolean;
+    /**
+     * Reasoning effort for this model (fetched from /v1/models, not hardcoded).
+     * Values: 'low' | 'medium' | 'high' | 'auto' | 'none'
+     */
+    reasoningEffort?: string;
+    /**
+     * Thinking budget for this model (fetched from /v1/models, not hardcoded).
+     * Values: 'auto' | 'enabled' | 'disabled'
+     */
+    thinkingBudget?: string;
+    /**
+     * Mode for this model (fetched from /v1/models, not hardcoded).
+     * Values: 'thinking' | 'reasoning' | 'non-thinking' | 'auto'
+     */
+    mode?: string;
+    /**
+     * Input modalities supported by this model.
+     * e.g., ['text', 'image', 'audio', 'video']
+     */
+    inputModalities?: string[];
     [key: string]: unknown;
 }
 interface TestModelParams {
@@ -98,6 +124,15 @@ interface ConnectionTestResult {
     success: boolean;
     status?: number;
     message?: string;
+    error?: string;
+}
+interface FetchModelsResult {
+    success: boolean;
+    models?: {
+        id: string;
+        name: string;
+        inputModalities?: string[];
+    }[];
     error?: string;
 }
 declare global {

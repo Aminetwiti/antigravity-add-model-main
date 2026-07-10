@@ -18,9 +18,13 @@ export const PLACEHOLDER_ID_RANGE = 200;
  *
  * The same input always produces the same output (idempotent), enabling
  * consistent references across requests.
+ *
+ * NOTE: Includes provider in hash to ensure unique IDs when multiple models
+ * share the same displayName but use different providers.
  */
 export function generateModelPlaceholderId(model: CustomModel): string {
-  const input = (model.displayName || model.name || 'custom-model').toLowerCase();
+  // Include provider to ensure uniqueness across providers
+  const input = `${model.provider}-${model.displayName || model.name || 'custom-model'}`.toLowerCase();
   let hash = 5381;
   for (let i = 0; i < input.length; i++) {
     hash = (hash << 5) + hash + input.charCodeAt(i);

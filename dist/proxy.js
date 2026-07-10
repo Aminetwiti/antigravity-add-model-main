@@ -47,6 +47,7 @@ const https = __importStar(require("https"));
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const dns = __importStar(require("dns"));
+const os = __importStar(require("os"));
 const electron_log_1 = __importDefault(require("electron-log"));
 let server = null;
 let proxyPort = 0;
@@ -387,6 +388,27 @@ function handleCustomModelRequest(res, model, geminiBody, isStream, retryCount =
                 safeEnd(res);
             }
         });
+        const status = apiRes.statusCode || 0;
+        // P3: Log 401 errors with detailed diagnostic context to help users
+        // understand why their custom endpoint rejected the request.
+        // Common causes: missing API key, wrong header name, expired token,
+        // wrong endpoint URL, account suspended.
+        if (status === 401) {
+            const apiKeyPreview = model.apiKey
+                ? `${model.apiKey.slice(0, 4)}…${model.apiKey.slice(-4)} (len=${model.apiKey.length})`
+                : '<empty>';
+            electron_log_1.default.error(`[Proxy] 401 Unauthorized from ${model.name} (${model.provider})`);
+            electron_log_1.default.error(`[Proxy]   URL: ${finalUrlStr}`);
+            electron_log_1.default.error(`[Proxy]   API key: ${apiKeyPreview}`);
+            electron_log_1.default.error(`[Proxy]   Headers sent: ${Object.keys(headers).join(', ')}`);
+            electron_log_1.default.error(`[Proxy]   Possible causes:`);
+            electron_log_1.default.error(`[Proxy]     - Missing or invalid API key (check custom_models.json)`);
+            electron_log_1.default.error(`[Proxy]     - Wrong header name for this provider (e.g. 'Authorization' vs 'x-api-key')`);
+            electron_log_1.default.error(`[Proxy]     - Expired or revoked token`);
+            electron_log_1.default.error(`[Proxy]     - Account suspended or rate-limited`);
+            electron_log_1.default.error(`[Proxy]     - Wrong endpoint URL (${finalUrlStr})`);
+            electron_log_1.default.error(`[Proxy]   Upstream response: ${JSON.stringify(apiRes.headers).slice(0, 200)}`);
+        }
         if (isStream) {
             // Check for API errors BEFORE writing streaming headers
             if (apiRes.statusCode >= 400) {
@@ -812,6 +834,9 @@ function handleRequest(req, res) {
                                         temperature: cap.isThinking ? undefined : 0.7,
                                         topP: cap.isThinking ? undefined : 0.9,
                                         topK: cap.isThinking ? undefined : 40,
+                                        reasoningEffort: m.reasoningEffort || undefined,
+                                        thinkingBudget: m.thinkingBudget || undefined,
+                                        mode: m.mode || undefined,
                                     };
                                 });
                                 return [...mapped, ...target];
@@ -825,6 +850,9 @@ function handleRequest(req, res) {
                                         displayName: m.displayName,
                                         supportsImages: cap.supportsImages,
                                         supportsThinking: cap.isThinking,
+                                        reasoningEffort: m.reasoningEffort || undefined,
+                                        thinkingBudget: m.thinkingBudget || undefined,
+                                        mode: m.mode || undefined,
                                         recommended: true,
                                         maxTokens: cap.maxTokens,
                                         maxOutputTokens: cap.maxOutputTokens,
@@ -1191,10 +1219,41 @@ function startProxy() {
             const defaultHost = process.env.AG_PROXY_HOST || '127.0.0.1';
             let primaryPort = defaultPort;
             let primaryHost = defaultHost;
-            function tryListen(port, host) {
+            // Build the ordered list of ports to try: env override → default → fallbacks → dynamic
+            const portCandidates = [defaultPort];
+            if (defaultPort === 50999) {
+                // Only add fallbacks if the user did not override the port via env
+                portCandidates.push(...constants_1.FALLBACK_PROXY_PORTS);
+            }
+            portCandidates.push(0); // 0 = OS-assigned dynamic port (last resort)
+            let attemptIdx = 0;
+            const tryListen = (port, host) => {
                 server.listen(port, host, () => {
                     proxyPort = server.address().port;
-                    electron_log_1.default.info(`[Proxy] Server listening on http://${host}:${proxyPort}`);
+                    const isFallback = port !== defaultPort && port !== 0;
+                    const isDynamic = port === 0;
+                    if (isFallback) {
+                        electron_log_1.default.warn(`[Proxy] Default port ${defaultPort} unavailable. Using fallback port ${proxyPort}.`);
+                        electron_log_1.default.warn(`[Proxy] Set AG_PROXY_PORT=${proxyPort} in your environment to silence this warning.`);
+                    }
+                    else if (isDynamic) {
+                        electron_log_1.default.warn(`[Proxy] All configured ports in use. Using OS-assigned dynamic port ${proxyPort}.`);
+                    }
+                    else {
+                        electron_log_1.default.info(`[Proxy] Server listening on http://${host}:${proxyPort}`);
+                    }
+                    // Persist the active port so other processes (ag-doctor-ui, scripts)
+                    // can discover which port the proxy is actually bound to.
+                    try {
+                        const home = process.env.HOME || process.env.USERPROFILE || os.homedir();
+                        const portFile = path.join(home, constants_1.ACTIVE_PORT_FILE);
+                        fs.mkdirSync(path.dirname(portFile), { recursive: true });
+                        fs.writeFileSync(portFile, String(proxyPort), 'utf-8');
+                        electron_log_1.default.debug(`[Proxy] Active port persisted to ${portFile}`);
+                    }
+                    catch (err) {
+                        electron_log_1.default.warn('[Proxy] Could not persist active port:', err.message);
+                    }
                     // Execute cleanup initialization after the server is already listening
                     // so that failures here don't prevent the port from binding.
                     try {
@@ -1205,14 +1264,16 @@ function startProxy() {
                     }
                     resolve(proxyPort);
                 });
-            }
+            };
             server.on('error', (err) => {
                 // Log full error details for diagnostics on new machines.
                 electron_log_1.default.error(`[Proxy] Server error: code=${err.code} message=${err.message} syscall=${err.syscall || ''} address=${err.address || ''} port=${err.port || ''}`);
-                if (err.code === 'EADDRINUSE' && primaryPort === defaultPort) {
-                    electron_log_1.default.warn(`[Proxy] Port ${defaultPort} is already in use. Retrying on dynamic port...`);
-                    primaryPort = 0;
-                    tryListen(0, primaryHost);
+                if (err.code === 'EADDRINUSE' && attemptIdx + 1 < portCandidates.length) {
+                    const triedPort = portCandidates[attemptIdx];
+                    const nextPort = portCandidates[attemptIdx + 1];
+                    electron_log_1.default.warn(`[Proxy] Port ${triedPort} is already in use. Trying ${nextPort === 0 ? 'OS-assigned dynamic port' : 'port ' + nextPort}...`);
+                    attemptIdx += 1;
+                    tryListen(nextPort, primaryHost);
                 }
                 else if (err.code === 'EACCES') {
                     // P2: Surface permission errors clearly instead of silently failing.
@@ -1224,6 +1285,7 @@ function startProxy() {
                     reject(err);
                 }
             });
+            primaryPort = portCandidates[0];
             tryListen(primaryPort, primaryHost);
         }
         catch (err) {

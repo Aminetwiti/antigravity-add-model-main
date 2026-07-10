@@ -4,7 +4,7 @@
  * Centralizes magic numbers and configuration values to improve maintainability.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PROVIDER_DEFAULT_URLS = exports.PROVIDERS_REQUIRING_API_KEY = exports.OPENAI_COMPATIBLE_PROVIDERS = exports.ALL_PROVIDERS = exports.PROVIDERS = exports.CONTENT_TYPES = exports.GOOGLE_HOSTS = exports.HTTP_STATUS = exports.PUBLIC_DNS_SERVERS = exports.PLACEHOLDER_ID_RANGE = exports.PLACEHOLDER_ID_BASE = exports.DEFAULT_TOP_K = exports.DEFAULT_TOP_P = exports.DEFAULT_TEMPERATURE = exports.CUSTOM_MODEL_MAX_OUTPUT_TOKENS = exports.CUSTOM_MODEL_MAX_TOKENS = exports.MAX_MAX_RETRIES = exports.MIN_MAX_RETRIES = exports.DEFAULT_MAX_RETRIES = exports.SERVER_ERROR_RETRY_BASE_DELAY_MS = exports.RATE_LIMIT_RETRY_BASE_DELAY_MS = exports.NON_STREAM_RETRY_BASE_DELAY_MS = exports.STREAM_RETRY_BASE_DELAY_MS = exports.DEFAULT_MODEL_REQUEST_TIMEOUT_MS = exports.FILE_DOWNLOAD_TIMEOUT_MS = exports.GOOGLE_FORWARD_TIMEOUT_MS = exports.GOOGLE_PROXY_TIMEOUT_MS = exports.MAX_REQUEST_BODY_SIZE = exports.DEFAULT_PROXY_PORT = exports.LS_CERT_FINGERPRINT = exports.LS_LOG_FILE_NAME = exports.DYNAMIC_PORT = exports.WINDOW_ORIGIN = void 0;
+exports.PROVIDER_DEFAULT_URLS = exports.PROVIDERS_REQUIRING_API_KEY = exports.OPENAI_COMPATIBLE_PROVIDERS = exports.ALL_PROVIDERS = exports.PROVIDERS = exports.CONTENT_TYPES = exports.GOOGLE_HOSTS = exports.HTTP_STATUS = exports.PUBLIC_DNS_SERVERS = exports.PLACEHOLDER_ID_RANGE = exports.PLACEHOLDER_ID_BASE = exports.DEFAULT_TOP_K = exports.DEFAULT_TOP_P = exports.DEFAULT_TEMPERATURE = exports.CUSTOM_MODEL_MAX_OUTPUT_TOKENS = exports.CUSTOM_MODEL_MAX_TOKENS = exports.MAX_MAX_RETRIES = exports.MIN_MAX_RETRIES = exports.DEFAULT_MAX_RETRIES = exports.SERVER_ERROR_RETRY_BASE_DELAY_MS = exports.RATE_LIMIT_RETRY_BASE_DELAY_MS = exports.NON_STREAM_RETRY_BASE_DELAY_MS = exports.STREAM_RETRY_BASE_DELAY_MS = exports.DEFAULT_MODEL_REQUEST_TIMEOUT_MS = exports.FILE_DOWNLOAD_TIMEOUT_MS = exports.GOOGLE_FORWARD_TIMEOUT_MS = exports.GOOGLE_PROXY_TIMEOUT_MS = exports.MAX_REQUEST_BODY_SIZE = exports.ACTIVE_PORT_FILE = exports.STUB_PORT_DEFAULT = exports.FALLBACK_PROXY_PORTS = exports.DEFAULT_PROXY_PORT = exports.LS_CERT_FINGERPRINT = exports.LS_LOG_FILE_NAME = exports.DYNAMIC_PORT = exports.WINDOW_ORIGIN = void 0;
 // ─── App Constants (used by main.ts, languageServer.ts, paths.ts) ─────────
 /** Origin used by the main BrowserWindow. */
 exports.WINDOW_ORIGIN = 'https://127.0.0.1';
@@ -15,8 +15,27 @@ exports.LS_LOG_FILE_NAME = 'language_server.log';
 /** SHA-256 fingerprint of the bundled language server certificate. */
 exports.LS_CERT_FINGERPRINT = 'sha256/sTZpQemOWEytaZqa7P/y/dNXbHMdOAzMvzHEhUwHZXw=';
 // ─── Network ───────────────────────────────────────────────────────────────
-/** Default port for the local proxy server. Falls back to dynamic port if in use. */
+/**
+ * Default port for the local proxy server.
+ *
+ * IMPORTANT: This port is reserved for the MAIN Antigravity proxy.
+ * The ag-doctor-ui emergency stub uses port 51999 (see STUB_PORT_DEFAULT)
+ * to avoid conflicts when both run simultaneously.
+ *
+ * Override via the AG_PROXY_PORT environment variable. If the default is in
+ * use, the proxy will try the FALLBACK_PROXY_PORTS in order, then bind to a
+ * random dynamic port as a last resort.
+ */
 exports.DEFAULT_PROXY_PORT = 50999;
+/** Fallback ports tried in order when DEFAULT_PROXY_PORT is in use. */
+exports.FALLBACK_PROXY_PORTS = [51000, 51001, 51002, 51003, 51004, 51005, 51006, 51007, 51008, 51009, 51010];
+/**
+ * Default port for the ag-doctor-ui emergency proxy stub.
+ * Kept separate from DEFAULT_PROXY_PORT to prevent conflicts.
+ */
+exports.STUB_PORT_DEFAULT = 51999;
+/** Path (relative to home) where the active proxy port is persisted for IPC. */
+exports.ACTIVE_PORT_FILE = '.gemini/antigravity/active_port';
 /** Maximum request body size accepted by the proxy (10 MB). Prevents memory exhaustion DoS. */
 exports.MAX_REQUEST_BODY_SIZE = 10 * 1024 * 1024;
 /** Timeout for Google proxy requests (60 seconds). */

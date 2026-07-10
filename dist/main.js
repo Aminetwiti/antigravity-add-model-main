@@ -44,6 +44,7 @@ const crypto = __importStar(require("crypto"));
 const readline = __importStar(require("readline"));
 const utils_1 = require("./utils");
 const languageServer_1 = require("./languageServer");
+const updater_1 = require("./updater");
 const constants_1 = require("./constants");
 const tray_1 = require("./tray");
 const storage_1 = require("./storage");
@@ -69,6 +70,17 @@ let isQuitting = false;
 const HEADLESS = process.env.ELECTRON_OZONE_PLATFORM_HINT === 'headless';
 // When set, skip LS startup and load this URL directly (for dev iteration).
 const DEV_URL = process.env.DEV_URL;
+// P0: Disable the auto-updater by default. The official updater tries to
+// verify the binary against a SHA-512 checksum baked into the unmodified
+// app, which will NEVER match our patched app.asar. This results in
+// "sha512 checksum mismatch" errors that crash the main process via an
+// unhandled promise rejection.
+//
+// Set AG_DISABLE_UPDATER=0 to force-enable the updater (only safe on
+// pristine, unpatched builds). See src/updater.ts for details.
+if (process.env.AG_DISABLE_UPDATER === undefined) {
+    process.env.AG_DISABLE_UPDATER = '1';
+}
 if (HEADLESS) {
     electron_1.app.commandLine.appendSwitch('ozone-platform', 'headless');
     electron_1.app.commandLine.appendSwitch('headless');
@@ -304,8 +316,13 @@ electron_1.app
     // checksum baked into the unmodified app, which will never match our
     // patched app.asar. The resulting checksum mismatch crashes the main
     // process via an unhandled promise rejection in the download stream.
-    // initAutoUpdater(HEADLESS);
-    main_1.default.warn('[Main] Auto-updater disabled (patched build).');
+    // Set AG_DISABLE_UPDATER=0 to force-enable (only safe on pristine builds).
+    if (process.env.AG_DISABLE_UPDATER === '0') {
+        (0, updater_1.initAutoUpdater)(HEADLESS);
+    }
+    else {
+        main_1.default.warn('[Main] Auto-updater disabled (AG_DISABLE_UPDATER=' + (process.env.AG_DISABLE_UPDATER || '1') + ').');
+    }
     hasStartedMainApplication = true;
 })
     .catch(() => {

@@ -553,6 +553,98 @@ export function registerIpcHandlers(storageManager: StorageManager): void {
       await shell.openExternal(url);
     }
   });
+
+  /**
+   * IPC handler to fetch available models from a provider's API.
+   * Supports OpenAI-compatible providers (GET /v1/models).
+   */
+  ipcMain.handle('storage:fetch-provider-models', async (_event, params: FetchModelsParams): Promise<FetchModelsResult> => {
+    return new Promise((resolve) => {
+      try {
+        const parsedUrl = new URL(params.apiUrl);
+        
+        // Determine the base URL and construct /v1/models endpoint
+        let modelsUrl = params.apiUrl;
+        
+        // If the URL ends with a specific endpoint like /chat/completions, extract base
+        if (modelsUrl.includes('/chat/completions')) {
+          modelsUrl = modelsUrl.replace(/\/chat\/completions.*$/, '/models');
+        } else if (modelsUrl.includes('/v1/messages')) {
+          // Anthropic doesn't have a /models endpoint, return error
+          resolve({ success: false, error: 'Anthropic provider does not support model listing via API' });
+          return;
+        } else if (!modelsUrl.endsWith('/models')) {
+          // Assume it's a base URL, append /v1/models
+          modelsUrl = modelsUrl.replace(/\/$/, '') + '/v1/models';
+        }
+        
+        const protocol = parsedUrl.protocol === 'https:' ? https : http;
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+        };
+        
+        if (params.apiKey && params.apiKey !== 'none') {
+          const decryptedKey = cryptoStore.decryptString(params.apiKey) as string;
+          headers['Authorization'] = `Bearer ${decryptedKey}`;
+        }
+        
+        const reqOptions = {
+          method: 'GET',
+          headers,
+          timeout: 10000,
+          rejectUnauthorized: !params.allowUnauthorized,
+        };
+        
+        log.info(`[IPC] Fetching models from: ${modelsUrl}`);
+        
+        const req = protocol.request(modelsUrl, reqOptions, (res) => {
+          let body = '';
+          res.on('data', (chunk) => (body += chunk));
+          res.on('end', () => {
+            if (res.statusCode === 200) {
+              try {
+                const parsed = JSON.parse(body) as { data?: Array<{ id: string; object?: string; input_modalities?: string[] }> };
+                
+                if (parsed.data && Array.isArray(parsed.data)) {
+                  const models = parsed.data
+                    .filter((m) => m.id && m.object === 'model')
+                    .map((m) => ({
+                      id: m.id,
+                      name: m.id,
+                      inputModalities: m.input_modalities || ['text'], // Default to text-only if not specified
+                    }));
+                  
+                  resolve({ success: true, models });
+                } else {
+                  resolve({ success: false, error: 'Invalid response format from API' });
+                }
+              } catch (err) {
+                resolve({ success: false, error: `Failed to parse response: ${(err as Error).message}` });
+              }
+            } else {
+              resolve({ success: false, error: `HTTP ${res.statusCode}: ${body}` });
+            }
+          });
+        });
+        
+        req.on('error', (err) => {
+          let message = err.message;
+          if (message.includes('ECONNREFUSED')) {
+            message = 'Connection refused — is the server running?';
+          } else if (message.includes('ENOTFOUND')) {
+            message = 'Host not found — check the URL';
+          } else if (message.includes('CERT') || message.includes('certificate') || message.includes('SSL')) {
+            message = 'SSL/TLS error — try enabling "allowUnauthorized" for self-signed certs';
+          }
+          resolve({ success: false, error: message });
+        });
+        
+        req.end();
+      } catch (err) {
+        resolve({ success: false, error: `Invalid URL: ${(err as Error).message}` });
+      }
+    });
+  });
 }
 
 // ─── Local Types ──────────────────────────────────────────────────────────────
@@ -573,6 +665,8 @@ interface CustomModelFileEntry {
   thinkingBudget?: string;
   /** Mode from /v1/models */
   mode?: string;
+  /** Input modalities (text, image, audio, video) */
+  inputModalities?: string[];
   [key: string]: unknown;
 }
 
@@ -601,6 +695,6 @@ interface FetchModelsParams {
 
 interface FetchModelsResult {
   success: boolean;
-  models?: { id: string; name: string }[];
+  models?: { id: string; name: string; inputModalities?: string[] }[];
   error?: string;
 }

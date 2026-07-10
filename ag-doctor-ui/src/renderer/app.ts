@@ -903,71 +903,96 @@ $('#modelsTestBtn').addEventListener('click', async () => {
 const addModelModalBackdrop = $('#addModelModalBackdrop') as HTMLDivElement;
 const addModelModalClose = $('#addModelModalClose') as HTMLButtonElement;
 const addModelModalCancel = $('#addModelModalCancel') as HTMLButtonElement;
+const addModelModalBack = $('#addModelModalBack') as HTMLButtonElement;
+const addModelModalFetch = $('#addModelModalFetch') as HTMLButtonElement;
 const addModelModalSave = $('#addModelModalSave') as HTMLButtonElement;
 
-const providerGrid = $('#providerGrid') as HTMLDivElement;
-const modelProviderInput = $('#modelProvider') as HTMLInputElement;
-const modelIdInput = $('#modelId') as HTMLInputElement;
-const externalModelNameInput = $('#externalModelName') as HTMLInputElement;
+const addStep1 = $('#addStep1') as HTMLDivElement;
+const addStep2 = $('#addStep2') as HTMLDivElement;
+const addStep1Indicator = $('#addStep1Indicator') as HTMLDivElement;
+const addStep2Indicator = $('#addStep2Indicator') as HTMLDivElement;
+const addStep1Badge = $('#addStep1Badge') as HTMLDivElement;
+const addStep2Badge = $('#addStep2Badge') as HTMLDivElement;
+
+const modelProviderTypeInput = $('#modelProviderType') as HTMLSelectElement;
 const modelApiUrlInput = $('#modelApiUrl') as HTMLInputElement;
 const modelApiKeyInput = $('#modelApiKey') as HTMLInputElement;
-const modelDisplayNameInput = $('#modelDisplayName') as HTMLInputElement;
+const modelAllowUnauthorizedInput = $('#modelAllowUnauthorized') as HTMLInputElement;
+const modelDisplayNameSuffixInput = $('#modelDisplayNameSuffix') as HTMLInputElement;
+const fetchedModelsList = $('#fetchedModelsList') as HTMLDivElement;
+const fetchModelsError = $('#fetchModelsError') as HTMLDivElement;
+const saveModelsError = $('#saveModelsError') as HTMLDivElement;
+const refetchModelsBtn = $('#refetchModelsBtn') as HTMLButtonElement;
 
-const DEFAULT_URLS: Record<string, string> = {
-  openai: 'https://api.openai.com/v1/chat/completions',
-  anthropic: 'https://api.anthropic.com/v1/messages',
-  openrouter: 'https://openrouter.ai/api/v1/chat/completions',
-  ollama: 'http://localhost:11434/v1/chat/completions',
-  google: 'https://generativelanguage.googleapis.com/v1beta/models/',
-  deepseek: 'https://api.deepseek.com/anthropic',
-  groq: 'https://api.groq.com/openai/v1',
-  mistral: 'https://api.mistral.ai/v1',
-  cerebras: 'https://api.cerebras.ai/v1',
-  kimi: 'https://api.moonshot.ai/anthropic/v1',
-  fireworks: 'https://api.fireworks.ai/inference/v1',
-  lmstudio: 'http://localhost:1234/v1',
-  llamacpp: 'http://localhost:8080/v1',
-  nvidia: 'https://integrate.api.nvidia.com/v1',
-  custom: '',
-};
-
-function selectProvider(provider: string): void {
-  modelProviderInput.value = provider;
-  providerGrid.querySelectorAll<HTMLButtonElement>('.provider-card').forEach((card) => {
-    card.classList.toggle('selected', card.dataset.provider === provider);
-  });
-  const url = DEFAULT_URLS[provider] || '';
-  modelApiUrlInput.value = url;
-  modelApiUrlInput.placeholder = url || 'https://api.example.com/v1/chat/completions';
+interface FetchedModel {
+  id: string;
+  name: string;
+  inputModalities?: string[];
 }
 
-providerGrid.querySelectorAll<HTMLButtonElement>('.provider-card').forEach((card) => {
-  card.addEventListener('click', () => selectProvider(card.dataset.provider!));
-});
+let fetchedModels: FetchedModel[] = [];
+let currentStep = 1;
 
-// Open modal
-function openAddModelModal(): void {
-  // Reset form
-  modelIdInput.value = '';
-  externalModelNameInput.value = '';
+function setAddStep(step: number): void {
+  currentStep = step;
+  if (step === 1) {
+    addStep1.style.display = 'block';
+    addStep2.style.display = 'none';
+    addModelModalBack.style.display = 'none';
+    addModelModalFetch.style.display = 'inline-flex';
+    addModelModalSave.style.display = 'none';
+    addStep1Indicator.style.opacity = '1';
+    addStep2Indicator.style.opacity = '0.5';
+    addStep1Badge.style.backgroundColor = '#3b82f6';
+    addStep1Badge.style.color = '#ffffff';
+    addStep2Badge.style.backgroundColor = '#27272a';
+    addStep2Badge.style.color = '#a1a1aa';
+  } else {
+    addStep1.style.display = 'none';
+    addStep2.style.display = 'block';
+    addModelModalBack.style.display = 'inline-flex';
+    addModelModalFetch.style.display = 'none';
+    addModelModalSave.style.display = 'inline-flex';
+    addStep1Indicator.style.opacity = '0.5';
+    addStep2Indicator.style.opacity = '1';
+    addStep1Badge.style.backgroundColor = '#27272a';
+    addStep1Badge.style.color = '#a1a1aa';
+    addStep2Badge.style.backgroundColor = '#3b82f6';
+    addStep2Badge.style.color = '#ffffff';
+  }
+}
+
+function resetAddModelModal(): void {
+  modelProviderTypeInput.value = 'openai';
+  modelApiUrlInput.value = '';
   modelApiKeyInput.value = '';
-  modelDisplayNameInput.value = '';
-  selectProvider('openai');
+  modelAllowUnauthorizedInput.checked = false;
+  modelDisplayNameSuffixInput.value = '';
+  fetchedModels = [];
+  fetchedModelsList.innerHTML = `
+    <div style="text-align: center; padding: 24px; color: #a1a1aa; font-size: 13px;">
+      Fetch models to see available options.
+    </div>
+  `;
+  fetchModelsError.style.display = 'none';
+  saveModelsError.style.display = 'none';
+  setAddStep(1);
+}
 
+function openAddModelModal(): void {
+  resetAddModelModal();
   addModelModalBackdrop.hidden = false;
   addModelModalBackdrop.style.display = 'grid';
-  // Focus first input for better UX
-  setTimeout(() => modelIdInput.focus(), 50);
+  setTimeout(() => modelApiUrlInput.focus(), 50);
 }
 
-$('#modelsAddBtn').addEventListener('click', openAddModelModal);
-$('#dashboardAddModelBtn').addEventListener('click', openAddModelModal);
-
-// Close modal helpers
 function closeAddModelModal(): void {
   addModelModalBackdrop.hidden = true;
   addModelModalBackdrop.style.display = 'none';
 }
+
+$('#modelsAddBtn').addEventListener('click', openAddModelModal);
+$('#dashboardAddModelBtn').addEventListener('click', openAddModelModal);
 
 addModelModalClose.addEventListener('click', closeAddModelModal);
 addModelModalCancel.addEventListener('click', closeAddModelModal);
@@ -986,73 +1011,192 @@ document.addEventListener('keydown', (e) => {
 addModelModalBackdrop.hidden = true;
 addModelModalBackdrop.style.display = 'none';
 
-// Auto-fill external model name when model ID is edited (e.g. models/gpt-4o -> gpt-4o)
-modelIdInput.addEventListener('input', () => {
-  const val = modelIdInput.value.trim();
-  if (val.startsWith('models/')) {
-    externalModelNameInput.value = val.replace(/^models\//, '');
+function renderFetchedModels(): void {
+  if (fetchedModels.length === 0) {
+    fetchedModelsList.innerHTML = `
+      <div style="text-align: center; padding: 24px; color: #a1a1aa; font-size: 13px;">
+        No models found at this endpoint.
+      </div>
+    `;
+    return;
   }
-});
 
-// Save model action
-addModelModalSave.addEventListener('click', async () => {
-  const provider = modelProviderInput.value;
-  let name = modelIdInput.value.trim();
-  const external = externalModelNameInput.value.trim();
+  const allChecked = fetchedModels.length > 0;
+  let html = `
+    <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid #27272a; margin-bottom: 4px;">
+      <input type="checkbox" id="selectAllModels" style="width: 16px; height: 16px; accent-color: #3b82f6; cursor: pointer;" ${allChecked ? 'checked' : ''} />
+      <label for="selectAllModels" style="margin: 0; font-size: 12px; color: #a1a1aa; cursor: pointer;">Select all</label>
+    </div>
+  `;
+
+  for (const model of fetchedModels) {
+    const supportsImages = model.inputModalities?.includes('image') || false;
+    const supportsVideo = model.inputModalities?.includes('video') || false;
+    const modalityBadges = [];
+    if (supportsImages) modalityBadges.push(`<span style="font-size: 10px; padding: 2px 6px; border-radius: 4px; background-color: #22c55e18; color: #22c55e;">image</span>`);
+    if (supportsVideo) modalityBadges.push(`<span style="font-size: 10px; padding: 2px 6px; border-radius: 4px; background-color: #a855f718; color: #a855f7;">video</span>`);
+
+    html += `
+      <div style="display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 6px; transition: background-color 0.15s ease;" class="fetched-model-row" data-model-id="${escapeHtml(model.id)}">
+        <input type="checkbox" class="model-select-checkbox" value="${escapeHtml(model.id)}" checked style="width: 16px; height: 16px; accent-color: #3b82f6; cursor: pointer; flex-shrink: 0;" />
+        <div style="flex: 1; min-width: 0;">
+          <div style="font-size: 13px; color: #f4f4f5; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(model.id)}</div>
+          ${model.name !== model.id ? `<div style="font-size: 11px; color: #a1a1aa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(model.name)}</div>` : ''}
+        </div>
+        <div style="display: flex; gap: 4px; flex-shrink: 0;">${modalityBadges.join('')}</div>
+      </div>
+    `;
+  }
+
+  fetchedModelsList.innerHTML = html;
+
+  const selectAll = $('#selectAllModels') as HTMLInputElement | null;
+  selectAll?.addEventListener('change', () => {
+    document.querySelectorAll<HTMLInputElement>('.model-select-checkbox').forEach((cb) => {
+      cb.checked = selectAll.checked;
+    });
+  });
+}
+
+async function fetchModels(): Promise<void> {
+  const provider = modelProviderTypeInput.value;
   const url = modelApiUrlInput.value.trim();
   const key = modelApiKeyInput.value.trim();
-  const display = modelDisplayNameInput.value.trim();
+  const allowUnauthorized = modelAllowUnauthorizedInput.checked;
 
-  if (!name) {
-    toast('Model ID is required', 'warn');
-    modelIdInput.focus();
-    return;
-  }
-  if (!name.startsWith('models/')) {
-    name = `models/${name}`;
-    modelIdInput.value = name;
-  }
-  if (!external) {
-    toast('External model name is required', 'warn');
-    externalModelNameInput.focus();
-    return;
-  }
   if (!url) {
-    toast('API URL is required', 'warn');
+    fetchModelsError.textContent = 'API URL is required';
+    fetchModelsError.style.display = 'block';
     modelApiUrlInput.focus();
     return;
   }
 
-  addModelModalSave.setAttribute('disabled', 'true');
-  setStatus('Adding model…', 'busy');
+  addModelModalFetch.setAttribute('disabled', 'true');
+  addModelModalFetch.textContent = 'Fetching…';
+  fetchModelsError.style.display = 'none';
+  setStatus('Fetching models…', 'busy');
 
   try {
+    const args = [
+      'models',
+      'fetch',
+      '--provider', provider,
+      '--url', url,
+      '--json',
+    ];
+    if (key) {
+      args.push('--key', key);
+    }
+    if (allowUnauthorized) {
+      args.push('--allow-unauthorized');
+    }
+
+    const r = await window.ag.run(args);
+    if (r.code !== 0) {
+      let msg = r.stderr || r.stdout || 'Failed to fetch models';
+      try {
+        const parsed = JSON.parse(msg);
+        if (parsed.error) msg = parsed.error;
+      } catch {
+        // keep raw msg
+      }
+      fetchModelsError.textContent = msg;
+      fetchModelsError.style.display = 'block';
+      setStatus('Ready');
+      return;
+    }
+
+    const result = JSON.parse(r.stdout) as { success: boolean; models?: FetchedModel[]; error?: string };
+    if (!result.success) {
+      fetchModelsError.textContent = result.error || 'Failed to fetch models';
+      fetchModelsError.style.display = 'block';
+      setStatus('Ready');
+      return;
+    }
+
+    fetchedModels = result.models || [];
+    renderFetchedModels();
+    setAddStep(2);
+    setStatus('Ready');
+  } catch (e) {
+    fetchModelsError.textContent = `Error: ${(e as Error).message}`;
+    fetchModelsError.style.display = 'block';
+    setStatus('Error', 'err');
+  } finally {
+    addModelModalFetch.removeAttribute('disabled');
+    addModelModalFetch.textContent = 'Fetch Models';
+  }
+}
+
+addModelModalFetch.addEventListener('click', fetchModels);
+refetchModelsBtn.addEventListener('click', fetchModels);
+
+addModelModalBack.addEventListener('click', () => setAddStep(1));
+
+addModelModalSave.addEventListener('click', async () => {
+  const selected = Array.from(document.querySelectorAll<HTMLInputElement>('.model-select-checkbox:checked')).map((cb) => cb.value);
+  if (selected.length === 0) {
+    saveModelsError.textContent = 'Please select at least one model';
+    saveModelsError.style.display = 'block';
+    return;
+  }
+
+  const provider = modelProviderTypeInput.value;
+  const url = modelApiUrlInput.value.trim();
+  const key = modelApiKeyInput.value.trim();
+  const suffix = modelDisplayNameSuffixInput.value.trim();
+
+  addModelModalSave.setAttribute('disabled', 'true');
+  addModelModalSave.textContent = 'Adding…';
+  saveModelsError.style.display = 'none';
+  setStatus(`Adding ${selected.length} model(s)…`, 'busy');
+
+  let added = 0;
+  let failed = 0;
+  const errors: string[] = [];
+
+  for (const modelId of selected) {
+    const name = `models/${modelId}`;
+    const display = suffix ? `${modelId} (${suffix})` : modelId;
     const args = [
       'models',
       'add',
       '--provider', provider,
       '--name', name,
-      '--external', external,
+      '--external', modelId,
       '--url', url,
       '--key', key || '',
-      '--display', display || name,
+      '--display', display,
       '--yes'
     ];
 
-    const r = await window.ag.run(args);
-    if (r.code === 0) {
-      toast(`Successfully added model ${name}`, 'ok');
-      closeAddModelModal();
-      void loadModels();
-    } else {
-      toast(`Failed to add model: ${r.stderr || r.stdout}`, 'err', 6000);
-      setStatus('Ready');
+    try {
+      const r = await window.ag.run(args);
+      if (r.code === 0) {
+        added++;
+      } else {
+        failed++;
+        errors.push(`${modelId}: ${r.stderr || r.stdout}`);
+      }
+    } catch (e) {
+      failed++;
+      errors.push(`${modelId}: ${(e as Error).message}`);
     }
-  } catch (e) {
-    toast(`Error: ${(e as Error).message}`, 'err');
-    setStatus('Error', 'err');
-  } finally {
-    addModelModalSave.removeAttribute('disabled');
+  }
+
+  addModelModalSave.removeAttribute('disabled');
+  addModelModalSave.textContent = 'Add Selected Models';
+
+  if (failed === 0) {
+    toast(`Successfully added ${added} model(s)`, 'ok');
+    closeAddModelModal();
+    void loadModels();
+  } else {
+    saveModelsError.textContent = `Added ${added}, failed ${failed}. ${errors.slice(0, 3).join('; ')}`;
+    saveModelsError.style.display = 'block';
+    toast(`Added ${added} model(s), ${failed} failed`, 'warn', 6000);
+    setStatus('Ready');
+    if (added > 0) void loadModels();
   }
 });
 
@@ -1172,12 +1316,21 @@ async function loadMitmStatus(): Promise<void> {
         try {
           const res = await window.ag.repairRun();
           if (res.ok) {
-            toast('Repair script completed successfully.', 'ok', 5000);
+            toast('✅ Repair script completed successfully.', 'ok', 3000);
+            
+            // Auto-start the proxy server after successful repair
+            console.log('[MITM] Auto-starting proxy server after repair...');
+            const startResult = await window.ag.proxyStart();
+            if (startResult.ok) {
+              toast('✅ Proxy server started automatically', 'ok', 3000);
+            } else {
+              toast(`⚠️ Repair succeeded but proxy server failed to start: ${startResult.message}`, 'warn', 6000);
+            }
           } else {
-            toast('Repair failed: ' + res.error, 'err', 6000);
+            toast('❌ Repair failed: ' + res.error, 'err', 6000);
           }
         } catch (err) {
-          toast('Repair IPC error: ' + (err as Error).message, 'err', 6000);
+          toast('❌ Repair IPC error: ' + (err as Error).message, 'err', 6000);
         } finally {
           void loadMitmStatus();
         }
@@ -1194,27 +1347,133 @@ async function loadMitmStatus(): Promise<void> {
   });
 }
 
-async function mitmAction(args: string[], successMsg: string, refresh = true): Promise<void> {
-  setStatus(`${args.slice(1).join(' ')}…`, 'busy');
+async function mitmAction(args: string[], successMsg: string, refresh = true, preStatus?: string): Promise<void> {
+  // Show a UAC-wait message up-front for operations that may trigger an
+  // elevation prompt. Otherwise users see "busy…" for several seconds with
+  // no indication of what is happening and assume the UI is hung.
+  setStatus(preStatus ?? `${args.slice(1).join(' ')}…`, 'busy');
   try {
     const r = await window.ag.run(args);
     if (r.code === 0) {
       toast(successMsg, 'ok', 5000);
       if (refresh) void loadMitmStatus();
     } else {
-      toast(`Failed: ${r.stderr || r.stdout}`, 'err', 6000);
+      // Enhanced error message with diagnostic hints
+      const errorMsg = r.stderr || r.stdout || 'Unknown error';
+      const operation = args.slice(1).join(' ');
+      
+      // Check for common failure patterns
+      if (errorMsg.toLowerCase().includes('uac') || errorMsg.toLowerCase().includes('cancelled')) {
+        toast(`❌ ${operation} failed: UAC prompt was declined. Please click "Yes" when prompted.`, 'err', 8000);
+      } else if (errorMsg.toLowerCase().includes('access denied') || r.code === 5) {
+        toast(`❌ ${operation} failed: Access denied. Try running as Administrator.`, 'err', 8000);
+      } else if (errorMsg.toLowerCase().includes('not found')) {
+        toast(`❌ ${operation} failed: Required system tool not found. Check your PATH.`, 'err', 8000);
+      } else {
+        toast(`❌ ${operation} failed: ${errorMsg.substring(0, 150)}`, 'err', 8000);
+      }
+      
+      console.error(`[MITM Action Failed]`, { args, code: r.code, stderr: r.stderr, stdout: r.stdout });
       setStatus('Error', 'err');
     }
   } catch (e) {
-    toast(`Error: ${(e as Error).message}`, 'err');
+    const operation = args.slice(1).join(' ');
+    toast(`❌ ${operation} error: ${(e as Error).message}`, 'err', 8000);
+    console.error(`[MITM Action Exception]`, { args, error: e });
     setStatus('Error', 'err');
   }
 }
 
-$('#mitmInstallBtn').addEventListener('click', () => void mitmAction(['mitm', 'install', '--yes'], 'CA installed'));
-$('#mitmUninstallBtn').addEventListener('click', () => void mitmAction(['mitm', 'uninstall', '--yes'], 'CA uninstalled'));
-$('#mitmProxyOnBtn').addEventListener('click', () => void mitmAction(['mitm', 'proxy-on'], 'Proxy enabled'));
-$('#mitmProxyOffBtn').addEventListener('click', () => void mitmAction(['mitm', 'proxy-off'], 'Proxy disabled'));
+// Subcommands that may trigger a UAC prompt on Windows (certutil + netsh
+// both require Admin). On macOS/Linux the message is misleading so we only
+// show it on Windows; the platform is reported via `ag.info()`.
+async function maybeUacPreStatus(subcommand: string): Promise<string> {
+  const info = await window.ag.info();
+  const platform: string = info?.platform ?? '';
+  if (platform !== 'win32') return `${subcommand}…`;
+  return `Waiting for UAC prompt — click "Yes" to allow ${subcommand}…`;
+}
+
+$('#mitmInstallBtn').addEventListener('click', async () => {
+  const pre = await maybeUacPreStatus('install CA');
+  void mitmAction(['mitm', 'install', '--yes'], 'CA installed', true, pre);
+});
+$('#mitmUninstallBtn').addEventListener('click', async () => {
+  const pre = await maybeUacPreStatus('uninstall CA');
+  void mitmAction(['mitm', 'uninstall', '--yes'], 'CA uninstalled', true, pre);
+});
+$('#mitmProxyOnBtn').addEventListener('click', async () => {
+  setStatus('Enabling proxy...', 'busy');
+  try {
+    // Step 1: Start the proxy server
+    console.log('[MITM] Starting proxy server...');
+    const startResult = await window.ag.proxyStart();
+    console.log('[MITM] Proxy start result:', startResult);
+    
+    if (!startResult.ok) {
+      toast(`❌ Failed to start proxy server: ${startResult.message}`, 'err', 8000);
+      setStatus('Error', 'err');
+      return;
+    }
+    
+    toast(`✅ Proxy server started (PID: ${startResult.pid})`, 'ok', 3000);
+    
+    // Step 2: Configure Windows to use the proxy
+    const pre = await maybeUacPreStatus('enable proxy');
+    setStatus(pre, 'busy');
+    
+    const r = await window.ag.run(['mitm', 'proxy-on']);
+    if (r.code === 0) {
+      toast('✅ Proxy enabled and running', 'ok', 5000);
+      void loadMitmStatus();
+    } else {
+      const errorMsg = r.stderr || r.stdout || 'Unknown error';
+      toast(`❌ Failed to configure proxy: ${errorMsg}`, 'err', 8000);
+      setStatus('Error', 'err');
+      
+      // Try to stop the proxy server since configuration failed
+      await window.ag.proxyStop();
+    }
+  } catch (e) {
+    toast(`❌ Proxy enable error: ${(e as Error).message}`, 'err', 8000);
+    console.error(`[MITM] Proxy enable exception:`, e);
+    setStatus('Error', 'err');
+  }
+});
+
+$('#mitmProxyOffBtn').addEventListener('click', async () => {
+  setStatus('Disabling proxy...', 'busy');
+  try {
+    // Step 1: Disable Windows proxy configuration
+    const pre = await maybeUacPreStatus('disable proxy');
+    setStatus(pre, 'busy');
+    
+    const r = await window.ag.run(['mitm', 'proxy-off']);
+    if (r.code === 0) {
+      toast('✅ Proxy disabled', 'ok', 3000);
+    } else {
+      const errorMsg = r.stderr || r.stdout || 'Unknown error';
+      toast(`⚠️ Proxy disable warning: ${errorMsg}`, 'warn', 5000);
+    }
+    
+    // Step 2: Stop the proxy server (even if config failed)
+    console.log('[MITM] Stopping proxy server...');
+    const stopResult = await window.ag.proxyStop();
+    console.log('[MITM] Proxy stop result:', stopResult);
+    
+    if (stopResult.ok) {
+      toast('✅ Proxy server stopped', 'ok', 3000);
+    } else {
+      toast(`⚠️ Failed to stop proxy server: ${stopResult.message}`, 'warn', 5000);
+    }
+    
+    void loadMitmStatus();
+  } catch (e) {
+    toast(`❌ Proxy disable error: ${(e as Error).message}`, 'err', 8000);
+    console.error(`[MITM] Proxy disable exception:`, e);
+    setStatus('Error', 'err');
+  }
+});
 $('#mitmExportCaBtn').addEventListener('click', () => void mitmAction(['mitm', 'export-ca'], 'CA exported'));
 
 // ─────────────────────────────────────────────────────────────────────────────

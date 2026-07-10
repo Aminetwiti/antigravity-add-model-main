@@ -10,8 +10,27 @@ export declare const DYNAMIC_PORT = 0;
 export declare const LS_LOG_FILE_NAME = "language_server.log";
 /** SHA-256 fingerprint of the bundled language server certificate. */
 export declare const LS_CERT_FINGERPRINT = "sha256/sTZpQemOWEytaZqa7P/y/dNXbHMdOAzMvzHEhUwHZXw=";
-/** Default port for the local proxy server. Falls back to dynamic port if in use. */
+/**
+ * Default port for the local proxy server.
+ *
+ * IMPORTANT: This port is reserved for the MAIN Antigravity proxy.
+ * The ag-doctor-ui emergency stub uses port 51999 (see STUB_PORT_DEFAULT)
+ * to avoid conflicts when both run simultaneously.
+ *
+ * Override via the AG_PROXY_PORT environment variable. If the default is in
+ * use, the proxy will try the FALLBACK_PROXY_PORTS in order, then bind to a
+ * random dynamic port as a last resort.
+ */
 export declare const DEFAULT_PROXY_PORT = 50999;
+/** Fallback ports tried in order when DEFAULT_PROXY_PORT is in use. */
+export declare const FALLBACK_PROXY_PORTS: readonly number[];
+/**
+ * Default port for the ag-doctor-ui emergency proxy stub.
+ * Kept separate from DEFAULT_PROXY_PORT to prevent conflicts.
+ */
+export declare const STUB_PORT_DEFAULT = 51999;
+/** Path (relative to home) where the active proxy port is persisted for IPC. */
+export declare const ACTIVE_PORT_FILE = ".gemini/antigravity/active_port";
 /** Maximum request body size accepted by the proxy (10 MB). Prevents memory exhaustion DoS. */
 export declare const MAX_REQUEST_BODY_SIZE: number;
 /** Timeout for Google proxy requests (60 seconds). */

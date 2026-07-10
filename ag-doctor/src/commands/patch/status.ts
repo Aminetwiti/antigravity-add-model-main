@@ -1,24 +1,102 @@
 /**
- * `ag-doctor patch status` — show current patch state.
+ * `ag-doctor patch status` — show detailed version-aware patch status.
  */
 import type { CommandContext } from '../../types';
-import { getPatchStatus } from '../../core/binary-patch';
-import { c, header, ok, warn, error, info } from '../../cli/output';
+import { info, ok, warn, error } from '../../cli/output';
+import { getVersionAwarePatchStatus } from '../../core/version-specific-patch';
 
-export function runPatchStatus(ctx: CommandContext): number {
-  if (!ctx.json) header('Binary patch status');
-  const s = getPatchStatus();
+export async function runPatchStatus(ctx: CommandContext): Promise<number> {
+  const status = getVersionAwarePatchStatus();
+
+  // If --json flag is present, output JSON and return
   if (ctx.json) {
-    console.log(JSON.stringify(s, null, 2));
-    return 0;
+    const jsonOutput = {
+      antigravityVersion: status.antigravityVersion,
+      binaryPath: status.binaryPath,
+      exists: status.exists,
+      applied: status.applied,
+      backupExists: status.backupExists,
+      compatible: status.compatible,
+      warningMessage: status.warningMessage,
+      recommendedPatch: status.recommendedPatch ? {
+        versionRange: status.recommendedPatch.versionRange,
+        description: status.recommendedPatch.description,
+        originalUrl: status.recommendedPatch.originalUrl,
+        patchedUrl: status.recommendedPatch.patchedUrl,
+      } : null,
+      detectedPatches: status.detectedPatches.map(p => ({
+        versionRange: p.versionRange,
+        description: p.description,
+        originalUrl: p.originalUrl,
+        patchedUrl: p.patchedUrl,
+      })),
+    };
+    console.log(JSON.stringify(jsonOutput, null, 2));
+    return status.compatible ? 0 : 1;
   }
-  info(`Binary:   ${s.binaryPath ?? c.gray('(not found)')}`);
-  info(`Exists:   ${s.exists ? c.green('yes') : c.red('no')}`);
-  info(`Applied:  ${s.applied ? c.green('yes') : c.yellow('no')}`);
-  info(`Backup:   ${s.backupExists ? c.green('yes') : c.gray('no')}`);
+
+  // Text output (existing code)
+  // Display Antigravity version
+  info(`Antigravity Version: ${status.antigravityVersion ?? 'unknown'}`);
   console.log('');
-  if (s.applied) ok('Patch is active');
-  else if (s.exists) warn('Patch is NOT applied — run `ag-doctor patch apply`');
-  else error('Binary not found');
-  return s.applied ? 0 : 1;
+
+  // Display binary info
+  if (!status.exists) {
+    error('Language server binary not found');
+    if (status.binaryPath) {
+      info(`Expected at: ${status.binaryPath}`);
+    }
+    return 1;
+  }
+
+  ok(`Binary found: ${status.binaryPath}`);
+  info(`Backup exists: ${status.backupExists ? 'yes' : 'no'}`);
+  console.log('');
+
+  // Display compatibility status
+  if (status.compatible) {
+    ok('Version is compatible with available patches');
+  } else {
+    error('Version compatibility issue detected');
+    if (status.warningMessage) {
+      warn(status.warningMessage);
+    }
+  }
+  console.log('');
+
+  // Display recommended patch
+  if (status.recommendedPatch) {
+    info('Recommended Patch:');
+    console.log(`  Version Range: ${status.recommendedPatch.versionRange}`);
+    console.log(`  Description: ${status.recommendedPatch.description}`);
+    console.log(`  Original URL: ${status.recommendedPatch.originalUrl}`);
+    console.log(`  Patched URL:  ${status.recommendedPatch.patchedUrl}`);
+  } else {
+    warn('No recommended patch found for this version');
+  }
+  console.log('');
+
+  // Display detected patches in binary
+  if (status.detectedPatches.length > 0) {
+    info('Detected URL patterns in binary:');
+    for (const patch of status.detectedPatches) {
+      console.log(`  • ${patch.versionRange}: ${patch.originalUrl}`);
+    }
+  } else {
+    warn('No known URL patterns detected in binary');
+    warn('This may indicate a new Antigravity version that requires patch definition update');
+  }
+  console.log('');
+
+  // Display patch application status
+  if (status.applied) {
+    ok('Patch is currently applied');
+  } else {
+    warn('Patch is not applied');
+    if (status.compatible && status.recommendedPatch) {
+      info('Run `ag-doctor patch apply` to apply the patch');
+    }
+  }
+
+  return status.compatible ? 0 : 1;
 }

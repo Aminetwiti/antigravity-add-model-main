@@ -806,106 +806,89 @@
 
   <!-- Modal: Add Custom Model -->
   <div class="modal-backdrop" id="addModelModalBackdrop" hidden>
-    <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal" role="dialog" aria-modal="true" style="width: 560px; max-width: 95vw;">
       <div class="modal-header">
-        <h2>Add Custom Model</h2>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div style="width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; background-color: #3b82f618; color: #3b82f6; font-weight: 600;">+</div>
+          <h2>Add Custom Model</h2>
+        </div>
         <button class="modal-close" id="addModelModalClose" type="button" aria-label="Close">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
       <div class="modal-body">
-        <form id="addModelForm" onsubmit="return false;">
-          <div class="form-group">
-            <label>Provider</label>
-            <div class="provider-grid" id="providerGrid">
-              <button type="button" class="provider-card" data-provider="openai" data-default-url="https://api.openai.com/v1/chat/completions">
-                <div class="provider-icon">O</div>
-                <div class="provider-name">OpenAI</div>
-              </button>
-              <button type="button" class="provider-card" data-provider="anthropic" data-default-url="https://api.anthropic.com/v1/messages">
-                <div class="provider-icon">A</div>
-                <div class="provider-name">Anthropic</div>
-              </button>
-              <button type="button" class="provider-card" data-provider="google" data-default-url="https://generativelanguage.googleapis.com/v1beta/models/">
-                <div class="provider-icon">G</div>
-                <div class="provider-name">Google</div>
-              </button>
-              <button type="button" class="provider-card" data-provider="ollama" data-default-url="http://localhost:11434/v1/chat/completions">
-                <div class="provider-icon">O</div>
-                <div class="provider-name">Ollama</div>
-              </button>
-              <button type="button" class="provider-card" data-provider="openrouter" data-default-url="https://openrouter.ai/api/v1/chat/completions">
-                <div class="provider-icon">OR</div>
-                <div class="provider-name">OpenRouter</div>
-              </button>
-              <button type="button" class="provider-card" data-provider="deepseek" data-default-url="https://api.deepseek.com/anthropic">
-                <div class="provider-icon">D</div>
-                <div class="provider-name">DeepSeek</div>
-              </button>
-              <button type="button" class="provider-card" data-provider="groq" data-default-url="https://api.groq.com/openai/v1">
-                <div class="provider-icon">GQ</div>
-                <div class="provider-name">Groq</div>
-              </button>
-              <button type="button" class="provider-card" data-provider="mistral" data-default-url="https://api.mistral.ai/v1">
-                <div class="provider-icon">M</div>
-                <div class="provider-name">Mistral</div>
-              </button>
-              <button type="button" class="provider-card" data-provider="cerebras" data-default-url="https://api.cerebras.ai/v1">
-                <div class="provider-icon">C</div>
-                <div class="provider-name">Cerebras</div>
-              </button>
-              <button type="button" class="provider-card" data-provider="kimi" data-default-url="https://api.moonshot.ai/anthropic/v1">
-                <div class="provider-icon">K</div>
-                <div class="provider-name">Kimi</div>
-              </button>
-              <button type="button" class="provider-card" data-provider="fireworks" data-default-url="https://api.fireworks.ai/inference/v1">
-                <div class="provider-icon">F</div>
-                <div class="provider-name">Fireworks</div>
-              </button>
-              <button type="button" class="provider-card" data-provider="lmstudio" data-default-url="http://localhost:1234/v1">
-                <div class="provider-icon">LM</div>
-                <div class="provider-name">LM Studio</div>
-              </button>
-              <button type="button" class="provider-card" data-provider="llamacpp" data-default-url="http://localhost:8080/v1">
-                <div class="provider-icon">LL</div>
-                <div class="provider-name">llama.cpp</div>
-              </button>
-              <button type="button" class="provider-card" data-provider="nvidia" data-default-url="https://integrate.api.nvidia.com/v1">
-                <div class="provider-icon">N</div>
-                <div class="provider-name">NVIDIA</div>
-              </button>
-              <button type="button" class="provider-card" data-provider="custom" data-default-url="">
-                <div class="provider-icon">+</div>
-                <div class="provider-name">Custom</div>
-              </button>
+        <!-- Step indicators -->
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 24px; padding: 0 4px;">
+          <div id="addStep1Indicator" style="display: flex; align-items: center; gap: 8px; flex: 1;">
+            <div id="addStep1Badge" style="width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background-color: #3b82f6; color: white; font-weight: 600; font-size: 13px;">1</div>
+            <div>
+              <div style="font-weight: 600; font-size: 13px; color: #f4f4f5;">Configure API</div>
+              <div style="font-size: 11px; color: #a1a1aa;">Provider, URL & key</div>
             </div>
-            <input type="hidden" id="modelProvider" value="openai" />
           </div>
-          <div class="form-group">
-            <label for="modelId">Model ID <span class="form-hint">(e.g. models/my-model)</span></label>
-            <input type="text" id="modelId" class="input" placeholder="models/gpt-4o" required />
+          <div style="width: 32px; height: 2px; background-color: #27272a;"></div>
+          <div id="addStep2Indicator" style="display: flex; align-items: center; gap: 8px; flex: 1; opacity: 0.5;">
+            <div id="addStep2Badge" style="width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background-color: #27272a; color: #a1a1aa; font-weight: 600; font-size: 13px;">2</div>
+            <div>
+              <div style="font-weight: 600; font-size: 13px; color: #f4f4f5;">Select Models</div>
+              <div style="font-size: 11px; color: #a1a1aa;">Choose models to add</div>
+            </div>
           </div>
-          <div class="form-group">
-            <label for="externalModelName">External Model Name <span class="form-hint">(e.g. gpt-4o)</span></label>
-            <input type="text" id="externalModelName" class="input" placeholder="gpt-4o" required />
+        </div>
+
+        <form id="addModelForm" onsubmit="return false;">
+          <!-- Step 1: Configure API -->
+          <div id="addStep1">
+            <div class="form-group">
+              <label for="modelProviderType">Provider Type</label>
+              <select id="modelProviderType" class="input" required>
+                <option value="openai">OpenAI Compatible</option>
+                <option value="anthropic">Anthropic Compatible</option>
+              </select>
+              <div class="form-hint">Select the API format your provider uses.</div>
+            </div>
+            <div class="form-group">
+              <label for="modelApiUrl">API URL</label>
+              <input type="url" id="modelApiUrl" class="input" placeholder="https://api.example.com/v1/chat/completions" required />
+              <div class="form-hint">The chat/completions or messages endpoint.</div>
+            </div>
+            <div class="form-group">
+              <label for="modelApiKey">API Key <span class="form-hint">(optional)</span></label>
+              <input type="password" id="modelApiKey" class="input" placeholder="sk-..." />
+            </div>
+            <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
+              <input type="checkbox" id="modelAllowUnauthorized" style="width: 18px; height: 18px; accent-color: #3b82f6; cursor: pointer;" />
+              <label for="modelAllowUnauthorized" style="margin: 0; font-weight: 400; cursor: pointer;">Allow self-signed / unauthorized certificates</label>
+            </div>
+            <div id="fetchModelsError" style="display: none; color: #ef4444; font-size: 13px; margin-top: 12px; padding: 10px; background-color: #ef444418; border-radius: 8px;"></div>
           </div>
-          <div class="form-group">
-            <label for="modelApiUrl">API URL</label>
-            <input type="url" id="modelApiUrl" class="input" placeholder="https://api.openai.com/v1/chat/completions" required />
-          </div>
-          <div class="form-group">
-            <label for="modelApiKey">API Key <span class="form-hint">(leave blank for local)</span></label>
-            <input type="password" id="modelApiKey" class="input" placeholder="sk-..." />
-          </div>
-          <div class="form-group">
-            <label for="modelDisplayName">Display Name <span class="form-hint">(optional)</span></label>
-            <input type="text" id="modelDisplayName" class="input" placeholder="My custom GPT-4o" />
+
+          <!-- Step 2: Select Models -->
+          <div id="addStep2" style="display: none;">
+            <div class="form-group">
+              <label>Display Name Suffix <span class="form-hint">(optional)</span></label>
+              <input type="text" id="modelDisplayNameSuffix" class="input" placeholder="e.g. My Provider" />
+            </div>
+            <div class="form-group">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <label>Available Models</label>
+                <button type="button" id="refetchModelsBtn" class="btn btn-ghost btn-sm" style="padding: 4px 10px; font-size: 12px;">Refetch</button>
+              </div>
+              <div id="fetchedModelsList" style="max-height: 240px; overflow-y: auto; border: 1px solid #27272a; border-radius: 8px; padding: 8px; background-color: #0f0f10;">
+                <div style="text-align: center; padding: 24px; color: #a1a1aa; font-size: 13px;">
+                  Fetch models to see available options.
+                </div>
+              </div>
+            </div>
+            <div id="saveModelsError" style="display: none; color: #ef4444; font-size: 13px; margin-top: 12px; padding: 10px; background-color: #ef444418; border-radius: 8px;"></div>
           </div>
         </form>
       </div>
       <div class="modal-footer">
         <button class="btn btn-ghost" id="addModelModalCancel" type="button">Cancel</button>
-        <button class="btn btn-primary" id="addModelModalSave" type="button">Save Model</button>
+        <button class="btn btn-primary" id="addModelModalBack" type="button" style="display: none;">Back</button>
+        <button class="btn btn-primary" id="addModelModalFetch" type="button">Fetch Models</button>
+        <button class="btn btn-primary" id="addModelModalSave" type="button" style="display: none;">Add Selected Models</button>
       </div>
     </div>
   </div>

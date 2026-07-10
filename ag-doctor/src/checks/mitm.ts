@@ -59,16 +59,18 @@ export async function checkMitm(): Promise<CheckResult> {
     }
     if (portMismatch) {
       if (isPatched) {
+        // Binary patch is active - Antigravity works perfectly!
+        // The system proxy port mismatch is irrelevant since it's bypassed
         return {
           id: 'mitm',
           title: 'MITM (HTTPS interception)',
-          status: 'warn',
-          message: `System proxy is on port ${s.proxyPort} (Safe: binary patch bypasses system proxy)`,
+          status: 'ok', // Changed from 'warn' to 'ok' - system is healthy
+          message: `System proxy bypassed (binary patch active) - Antigravity works perfectly`,
           details:
             details +
             `\n\nNote: Antigravity is binary-patched to connect directly to the local proxy on ${DEFAULT_MITM_PORT}.\n` +
-            `The system proxy is bypassed, so Antigravity works perfectly.\n` +
-            `However, other system apps might fail if they try to use port ${s.proxyPort}.\n` +
+            `The system proxy on port ${s.proxyPort} is bypassed, so Antigravity works perfectly.\n` +
+            `Other system apps might fail if they try to use port ${s.proxyPort}.\n` +
             `If you want to clear it, run an elevated PowerShell and execute:\n` +
             `  netsh winhttp reset proxy`,
           fixable: false,

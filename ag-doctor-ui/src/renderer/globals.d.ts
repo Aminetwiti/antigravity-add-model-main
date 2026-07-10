@@ -24,6 +24,13 @@ interface AgAPI {
   trayStatus(status: 'ok' | 'warn' | 'err'): Promise<void>;
   openExternal(url: string): Promise<void>;
   reveal(p: string): Promise<void>;
+  
+  // MITM Proxy Server Management
+  proxyStart(): Promise<{ ok: boolean; message: string; pid?: number }>;
+  proxyStop(): Promise<{ ok: boolean; message: string }>;
+  proxyStatus(): Promise<{ ok: boolean; data?: { running: boolean; port: number; pid?: number; error?: string }; error?: string }>;
+  proxyRestart(): Promise<{ ok: boolean; message: string }>;
+  
   onRunDoctor(handler: () => void): () => void;
   onNavigate(handler: (view: string) => void): () => void;
   onCommandPalette(handler: () => void): () => void;
@@ -44,7 +51,7 @@ interface AgAPI {
 
   // Proxy stub lifecycle — emergency fallback when Antigravity's bundled proxy fails
   proxyStartStub(): Promise<{ ok: boolean; pid?: number; note?: string; error?: string }>;
-  proxyStatus(): Promise<{ ok: boolean; data?: { ok: boolean; stub: boolean; latencyMs: number; error?: string }; error?: string }>;
+  proxyStubStatus(): Promise<{ ok: boolean; data?: { ok: boolean; stub: boolean; latencyMs: number; error?: string }; error?: string }>;
 }
 
 interface Window {

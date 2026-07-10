@@ -203,8 +203,8 @@ export async function runModelsFetch(ctx: CommandContext): Promise<number> {
   }
 
   if (!ctx.json) header('Fetch models');
-  info(`Provider: ${provider}`);
-  info(`URL:      ${apiUrl}`);
+  if (!ctx.json) info(`Provider: ${provider}`);
+  if (!ctx.json) info(`URL:      ${apiUrl}`);
 
   const sp = ctx.json ? null : new Spinner('Querying /v1/models …');
   sp?.start();
@@ -214,8 +214,10 @@ export async function runModelsFetch(ctx: CommandContext): Promise<number> {
   sp?.stop();
 
   if (!result.success) {
-    error(result.error || 'Unknown error');
-    if (result.url) info(`Tried: ${result.url}`);
+    if (!ctx.json) {
+      error(result.error || 'Unknown error');
+      if (result.url) info(`Tried: ${result.url}`);
+    }
     if (ctx.json) {
       console.log(JSON.stringify(result, null, 2));
     }

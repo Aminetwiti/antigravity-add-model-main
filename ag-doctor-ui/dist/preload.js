@@ -13,6 +13,11 @@ const api = {
     trayStatus: (status) => electron_1.ipcRenderer.invoke('ag:tray-status', status),
     openExternal: (url) => electron_1.ipcRenderer.invoke('ag:open-external', url),
     reveal: (p) => electron_1.ipcRenderer.invoke('ag:reveal', p),
+    // MITM Proxy Server Management
+    proxyStart: () => electron_1.ipcRenderer.invoke('ag:proxy:start'),
+    proxyStop: () => electron_1.ipcRenderer.invoke('ag:proxy:stop'),
+    proxyStatus: () => electron_1.ipcRenderer.invoke('ag:proxy:status'),
+    proxyRestart: () => electron_1.ipcRenderer.invoke('ag:proxy:restart'),
     // Antigravity lifecycle (version, status, launch, kill, restart)
     antigravityStatus: () => electron_1.ipcRenderer.invoke('ag:antigravity:status'),
     antigravityVersion: () => electron_1.ipcRenderer.invoke('ag:antigravity:version'),
@@ -21,7 +26,7 @@ const api = {
     antigravityRestart: () => electron_1.ipcRenderer.invoke('ag:antigravity:restart'),
     // Proxy stub lifecycle — emergency fallback when Antigravity's bundled proxy fails
     proxyStartStub: () => electron_1.ipcRenderer.invoke('ag:proxy:start-stub'),
-    proxyStatus: () => electron_1.ipcRenderer.invoke('ag:proxy:status'),
+    proxyStubStatus: () => electron_1.ipcRenderer.invoke('ag:proxy:stub-status'),
     proxyStats: () => electron_1.ipcRenderer.invoke('ag:proxy-stats'),
     // Installation Detector — scans for Antigravity binaries (v1.x vs v2.0+)
     detectInstallation: () => electron_1.ipcRenderer.invoke('ag:detect-installation'),

@@ -27,6 +27,17 @@ const api = {
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('ag:open-external', url),
   reveal: (p: string): Promise<void> => ipcRenderer.invoke('ag:reveal', p),
 
+  // MITM Proxy Server Management
+  proxyStart: (): Promise<{ ok: boolean; message: string; pid?: number }> => 
+    ipcRenderer.invoke('ag:proxy:start'),
+  proxyStop: (): Promise<{ ok: boolean; message: string }> => 
+    ipcRenderer.invoke('ag:proxy:stop'),
+  proxyStatus: (): Promise<{ ok: boolean; data?: { running: boolean; port: number; pid?: number; error?: string }; error?: string }> => 
+    ipcRenderer.invoke('ag:proxy:status'),
+  proxyRestart: (): Promise<{ ok: boolean; message: string }> => 
+    ipcRenderer.invoke('ag:proxy:restart'),
+
+
   // Antigravity lifecycle (version, status, launch, kill, restart)
   antigravityStatus: (): Promise<{ ok: boolean; data?: unknown; error?: string }> =>
     ipcRenderer.invoke('ag:antigravity:status'),
@@ -42,8 +53,8 @@ const api = {
   // Proxy stub lifecycle — emergency fallback when Antigravity's bundled proxy fails
   proxyStartStub: (): Promise<{ ok: boolean; pid?: number; note?: string; error?: string }> =>
     ipcRenderer.invoke('ag:proxy:start-stub'),
-  proxyStatus: (): Promise<{ ok: boolean; data?: { ok: boolean; stub: boolean; latencyMs: number; error?: string }; error?: string }> =>
-    ipcRenderer.invoke('ag:proxy:status'),
+  proxyStubStatus: (): Promise<{ ok: boolean; data?: { ok: boolean; stub: boolean; latencyMs: number; error?: string }; error?: string }> =>
+    ipcRenderer.invoke('ag:proxy:stub-status'),
   proxyStats: (): Promise<{
     ok: boolean;
     data?: {

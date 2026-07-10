@@ -54,6 +54,7 @@ const storageAPI = {
     saveCustomModel: (model) => electron_1.ipcRenderer.invoke('storage:save-custom-model', model),
     deleteCustomModel: (modelName) => electron_1.ipcRenderer.invoke('storage:delete-custom-model', modelName),
     testModelConnection: (model) => electron_1.ipcRenderer.invoke('storage:test-model-connection', model),
+    fetchModels: (params) => electron_1.ipcRenderer.invoke('storage:fetch-models', params),
 };
 const logsAPI = {
     getElectronLogs: () => electron_1.ipcRenderer.invoke('logs:electron'),
@@ -498,74 +499,98 @@ window.addEventListener('DOMContentLoaded', () => {
         modal.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
                 <div style="display: flex; align-items: center; gap: 10px;">
-                    <div id="agy-modal-provider-icon" style="width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; background-color: #10a37f18; color: #10a37f;">${PROVIDER_ICONS.openai}</div>
-                    <h3 style="margin: 0; font-size: 20px; font-weight: 600; color: #f4f4f5;">Add Custom AI Model</h3>
+                    <div style="width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; background-color: #3b82f618; color: #3b82f6;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M2 12h20"/></svg>
+                    </div>
+                    <h3 style="margin: 0; font-size: 20px; font-weight: 600; color: #f4f4f5;">Add Custom Model</h3>
                 </div>
                 <button id="agy-modal-close" style="background: transparent; border: none; color: #a1a1aa; cursor: pointer; font-size: 20px; line-height: 1; padding: 4px; display: flex; align-items: center; justify-content: center; transition: color 0.15s ease;">&times;</button>
             </div>
 
             <div style="display: flex; flex-direction: column; gap: 16px; margin-bottom: 24px;">
-                <!-- Provider -->
-                <div style="display: flex; flex-direction: column; gap: 6px;">
-                    <label style="font-size: 13px; font-weight: 500; color: #a1a1aa;">API Provider</label>
-                    <select id="agy-provider" style="background-color: #27272a; border: 1px solid #3f3f46; border-radius: 8px; color: #f4f4f5; padding: 10px 12px; font-size: 14px; outline: none; cursor: pointer; transition: border-color 0.15s ease;">
-                        <option value="openai">OpenAI (ChatGPT)</option>
-                        <option value="anthropic">Anthropic (Claude)</option>
-                        <option value="google">Google AI Studio (Gemini)</option>
-                        <option value="ollama">Ollama (Local)</option>
-                        <option value="openrouter">OpenRouter</option>
-                        <option value="deepseek">DeepSeek</option>
-                        <option value="groq">Groq</option>
-                        <option value="mistral">Mistral</option>
-                        <option value="cerebras">Cerebras</option>
-                        <option value="kimi">Kimi (Moonshot)</option>
-                        <option value="fireworks">Fireworks AI</option>
-                        <option value="lmstudio">LM Studio (Local)</option>
-                        <option value="llamacpp">llama.cpp (Local)</option>
-                        <option value="nvidia">NVIDIA NIM</option>
-                        <option value="custom">Custom / Other</option>
-                    </select>
-                </div>
-
-                <!-- Model ID -->
-                <div style="display: flex; flex-direction: column; gap: 6px;">
-                    <label style="font-size: 13px; font-weight: 500; color: #a1a1aa;">Model Name / ID <span style="color: #ef4444;">*</span></label>
-                    <input type="text" id="agy-model-id" placeholder="e.g. gpt-4o" style="background-color: #27272a; border: 1px solid #3f3f46; border-radius: 8px; color: #f4f4f5; padding: 10px 12px; font-size: 14px; outline: none; transition: border-color 0.15s ease;" required />
-                    <div id="agy-model-id-error" style="font-size: 11px; color: #ef4444; display: none; margin-top: 2px;"></div>
-                </div>
-
-                <!-- Friendly Display Name -->
-                <div style="display: flex; flex-direction: column; gap: 6px;">
-                    <label style="font-size: 13px; font-weight: 500; color: #a1a1aa;">Friendly Display Name</label>
-                    <input type="text" id="agy-display-name" placeholder="e.g. GPT-4o (OpenAI)" style="background-color: #27272a; border: 1px solid #3f3f46; border-radius: 8px; color: #f4f4f5; padding: 10px 12px; font-size: 14px; outline: none; transition: border-color 0.15s ease;" />
-                </div>
-
-                <!-- API Key -->
-                <div id="agy-key-container" style="display: flex; flex-direction: column; gap: 6px;">
-                    <label style="font-size: 13px; font-weight: 500; color: #a1a1aa;">API Key <span id="agy-key-required" style="color: #ef4444;">*</span></label>
-                    <input type="password" id="agy-api-key" placeholder="Enter API key" style="background-color: #27272a; border: 1px solid #3f3f46; border-radius: 8px; color: #f4f4f5; padding: 10px 12px; font-size: 14px; outline: none; transition: border-color 0.15s ease;" />
-                </div>
-
-                <!-- API URL -->
-                <div style="display: flex; flex-direction: column; gap: 6px;">
-                    <label style="font-size: 13px; font-weight: 500; color: #a1a1aa;">API URL <span style="color: #ef4444;">*</span></label>
-                    <div style="display: flex; gap: 6px; align-items: center;">
-                        <input type="text" id="agy-api-url" placeholder="https://api.openai.com/v1/chat/completions" style="flex: 1; background-color: #27272a; border: 1px solid #3f3f46; border-radius: 8px; color: #f4f4f5; padding: 10px 12px; font-size: 14px; outline: none; transition: border-color 0.15s ease;" required />
-                        <div id="agy-url-status" style="width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background-color: #71717a; transition: background-color 0.3s ease;" title="URL not yet validated"></div>
+                <!-- Step Indicator -->
+                <div style="display: flex; align-items: center; gap: 12px; padding-bottom: 16px; border-bottom: 1px solid #3f3f46;">
+                    <div id="agy-step-1-indicator" style="display: flex; align-items: center; gap: 8px;">
+                        <div style="width: 28px; height: 28px; border-radius: 50%; background-color: #3b82f6; color: white; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600;">1</div>
+                        <span style="font-size: 13px; font-weight: 500; color: #e4e4e7;">Configure API</span>
                     </div>
-                    <div id="agy-url-error" style="font-size: 11px; color: #ef4444; display: none; margin-top: 2px;"></div>
+                    <div style="flex: 1; height: 2px; background-color: #3f3f46;"></div>
+                    <div id="agy-step-2-indicator" style="display: flex; align-items: center; gap: 8px;">
+                        <div id="agy-step-2-circle" style="width: 28px; height: 28px; border-radius: 50%; background-color: #3f3f46; color: #71717a; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600;">2</div>
+                        <span id="agy-step-2-text" style="font-size: 13px; font-weight: 500; color: #71717a;">Select Models</span>
+                    </div>
+                </div>
+
+                <!-- Step 1: API Configuration -->
+                <div id="agy-step-1-content" style="display: flex; flex-direction: column; gap: 16px;">
+                    <!-- Provider Type -->
+                    <div style="display: flex; flex-direction: column; gap: 6px;">
+                        <label style="font-size: 13px; font-weight: 500; color: #a1a1aa;">Provider Type <span style="color: #ef4444;">*</span></label>
+                        <select id="agy-provider-type" style="background-color: #27272a; border: 1px solid #3f3f46; border-radius: 8px; color: #f4f4f5; padding: 10px 12px; font-size: 14px; outline: none; cursor: pointer; transition: border-color 0.15s ease;">
+                            <option value="openai">OpenAI Compatible</option>
+                            <option value="anthropic">Anthropic Compatible</option>
+                        </select>
+                    </div>
+
+                    <!-- API URL -->
+                    <div style="display: flex; flex-direction: column; gap: 6px;">
+                        <label style="font-size: 13px; font-weight: 500; color: #a1a1aa;">API URL <span style="color: #ef4444;">*</span></label>
+                        <input type="text" id="agy-api-url" placeholder="https://api.openai.com/v1/chat/completions" style="background-color: #27272a; border: 1px solid #3f3f46; border-radius: 8px; color: #f4f4f5; padding: 10px 12px; font-size: 14px; outline: none; transition: border-color 0.15s ease;" />
+                        <div id="agy-url-error" style="font-size: 11px; color: #ef4444; display: none;"></div>
+                    </div>
+
+                    <!-- API Key -->
+                    <div style="display: flex; flex-direction: column; gap: 6px;">
+                        <label style="font-size: 13px; font-weight: 500; color: #a1a1aa;">API Key <span style="color: #71717a;">(optional for local)</span></label>
+                        <input type="password" id="agy-api-key" placeholder="sk-..." style="background-color: #27272a; border: 1px solid #3f3f46; border-radius: 8px; color: #f4f4f5; padding: 10px 12px; font-size: 14px; outline: none; transition: border-color 0.15s ease;" />
+                    </div>
+
+                    <!-- Allow Unauthorized SSL -->
+                    <div style="display: flex; align-items: center; gap: 8px; padding: 10px 12px; background-color: #27272a; border: 1px solid #3f3f46; border-radius: 8px;">
+                        <input type="checkbox" id="agy-allow-unauthorized" style="width: 16px; height: 16px; cursor: pointer;" />
+                        <label for="agy-allow-unauthorized" style="font-size: 13px; color: #d4d4d8; cursor: pointer; user-select: none;">Allow self-signed certificates</label>
+                    </div>
+
+                    <!-- Fetch Models Button -->
+                    <button id="agy-fetch-models-btn" type="button" style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); border: none; color: white; padding: 12px 16px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.15s ease; box-shadow: 0 4px 6px -1px rgba(59, 130, 246, 0.3);">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="16 8 12 12 8 8"/><line x1="12" y1="16" x2="12" y2="12"/></svg>
+                        Fetch Available Models
+                    </button>
+                    <div id="agy-fetch-status" style="font-size: 12px; color: #a1a1aa; display: none; text-align: center;"></div>
+                </div>
+
+                <!-- Step 2: Model Selection -->
+                <div id="agy-step-2-content" style="display: none; flex-direction: column; gap: 16px;">
+                    <div style="font-size: 13px; color: #a1a1aa;">Select one or more models to add:</div>
+                    
+                    <!-- Models List -->
+                    <div id="agy-models-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 400px; overflow-y: auto; padding: 8px; background-color: #1c1c1f; border: 1px solid #3f3f46; border-radius: 8px;">
+                        <!-- Models will be populated here -->
+                    </div>
+
+                    <!-- Back Button -->
+                    <button id="agy-back-to-step1" type="button" style="background-color: #27272a; border: 1px solid #3f3f46; color: #d4d4d8; padding: 10px 16px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.15s ease;">
+                        ← Back to Configuration
+                    </button>
+
+                    <!-- Selected Models Display -->
+                    <div id="agy-selected-models" style="display: none; flex-direction: column; gap: 8px; padding: 12px; background-color: #1c1c1f; border: 1px solid #22c55e; border-radius: 8px;">
+                        <div style="font-size: 12px; font-weight: 600; color: #22c55e;">Selected Models:</div>
+                        <div id="agy-selected-list" style="font-size: 12px; color: #d4d4d8;"></div>
+                    </div>
+                </div>
+
+                <!-- Display Name Suffix (Optional, shown in step 2) -->
+                <div id="agy-display-name-container" style="display: none; flex-direction: column; gap: 6px;">
+                    <label style="font-size: 13px; font-weight: 500; color: #a1a1aa;">Display Name Suffix (optional)</label>
+                    <input type="text" id="agy-display-name-suffix" placeholder="e.g. (via OpenRouter)" style="background-color: #27272a; border: 1px solid #3f3f46; border-radius: 8px; color: #f4f4f5; padding: 10px 12px; font-size: 14px; outline: none; transition: border-color 0.15s ease;" />
+                    <div style="font-size: 11px; color: #71717a;">Will be appended to model names</div>
                 </div>
             </div>
 
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <button id="agy-btn-test" style="background-color: transparent; border: 1px solid #3f3f46; border-radius: 8px; color: #a1a1aa; padding: 10px 14px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s ease; display: flex; align-items: center; gap: 6px;">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-                    Test Connection
-                </button>
-                <div style="display: flex; gap: 12px;">
-                    <button id="agy-btn-cancel" style="background-color: #27272a; border: 1px solid #3f3f46; border-radius: 8px; color: #e4e4e7; padding: 10px 18px; font-size: 14px; font-weight: 500; cursor: pointer; transition: background-color 0.15s ease, color 0.15s ease;">Cancel</button>
-                    <button id="agy-btn-save" style="background-color: #e4e4e7; border: none; border-radius: 8px; color: #18181b; padding: 10px 22px; font-size: 14px; font-weight: 500; cursor: pointer; transition: background-color 0.15s ease, opacity 0.15s ease;">Save Model</button>
-                </div>
+            <div style="display: flex; gap: 12px; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #3f3f46;">
+                <button id="agy-btn-cancel" style="background: transparent; border: 1px solid #3f3f46; color: #d4d4d8; padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.15s ease;">Cancel</button>
+                <button id="agy-btn-save" style="background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); border: none; color: white; padding: 10px 24px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.15s ease; box-shadow: 0 4px 6px -1px rgba(34, 197, 94, 0.3); display: none;">Add Selected Models</button>
             </div>
         `;
         overlay.appendChild(modal);
@@ -587,276 +612,201 @@ window.addEventListener('DOMContentLoaded', () => {
             if (e.target === overlay)
                 closeModal();
         });
-        const providerSelect = document.getElementById('agy-provider');
+        // Element references for Step 1
+        const providerTypeSelect = document.getElementById('agy-provider-type');
         const urlInput = document.getElementById('agy-api-url');
-        const keyContainer = document.getElementById('agy-key-container');
         const keyInput = document.getElementById('agy-api-key');
-        const modelInput = document.getElementById('agy-model-id');
-        const nameInput = document.getElementById('agy-display-name');
-        const urlStatus = document.getElementById('agy-url-status');
+        const allowUnauthorized = document.getElementById('agy-allow-unauthorized');
+        const fetchModelsBtn = document.getElementById('agy-fetch-models-btn');
+        const fetchStatus = document.getElementById('agy-fetch-status');
         const urlError = document.getElementById('agy-url-error');
-        const modelIdError = document.getElementById('agy-model-id-error');
-        const providerIcon = document.getElementById('agy-modal-provider-icon');
-        const keyRequired = document.getElementById('agy-key-required');
-        const testBtn = document.getElementById('agy-btn-test');
+        // Element references for Step 2
+        const step1Content = document.getElementById('agy-step-1-content');
+        const step2Content = document.getElementById('agy-step-2-content');
+        const step1Indicator = document.getElementById('agy-step-1-indicator');
+        const step2Indicator = document.getElementById('agy-step-2-indicator');
+        const step2Circle = document.getElementById('agy-step-2-circle');
+        const step2Text = document.getElementById('agy-step-2-text');
+        const modelsList = document.getElementById('agy-models-list');
+        const backToStep1Btn = document.getElementById('agy-back-to-step1');
+        const selectedModelsDiv = document.getElementById('agy-selected-models');
+        const selectedListDiv = document.getElementById('agy-selected-list');
+        const displayNameContainer = document.getElementById('agy-display-name-container');
+        const displayNameSuffix = document.getElementById('agy-display-name-suffix');
         const saveBtn = document.getElementById('agy-btn-save');
-        const prefilledUrls = {
-            openai: 'https://api.openai.com/v1/chat/completions',
-            anthropic: 'https://api.anthropic.com/v1/messages',
-            ollama: 'http://localhost:11434/v1/chat/completions',
-            openrouter: 'https://openrouter.ai/api/v1/chat/completions',
-            deepseek: 'https://api.deepseek.com/anthropic',
-            groq: 'https://api.groq.com/openai/v1',
-            mistral: 'https://api.mistral.ai/v1',
-            cerebras: 'https://api.cerebras.ai/v1',
-            kimi: 'https://api.moonshot.ai/anthropic/v1',
-            fireworks: 'https://api.fireworks.ai/inference/v1',
-            lmstudio: 'http://localhost:1234/v1',
-            llamacpp: 'http://localhost:8080/v1',
-            nvidia: 'https://integrate.api.nvidia.com/v1',
-            custom: '',
-        };
-        // Real-time URL validation
-        const validateUrl = () => {
-            const val = urlInput.value.trim();
-            if (!val) {
-                urlStatus.style.backgroundColor = '#71717a';
-                urlStatus.title = 'URL required';
-                return;
-            }
-            try {
-                const u = new URL(val);
-                if (['http:', 'https:'].includes(u.protocol)) {
-                    urlStatus.style.backgroundColor = '#22c55e';
-                    urlStatus.title = 'Valid URL format';
-                    urlError.style.display = 'none';
-                }
-                else {
-                    urlStatus.style.backgroundColor = '#fbbf24';
-                    urlStatus.title = 'URL must use http or https';
-                }
-            }
-            catch {
-                urlStatus.style.backgroundColor = '#ef4444';
-                urlStatus.title = 'Invalid URL format';
-                urlError.textContent = 'Please enter a valid URL (e.g. https://api.openai.com/v1)';
-                urlError.style.display = 'block';
-            }
-        };
-        // Model ID validation
-        const validateModelId = () => {
-            const val = modelInput.value.trim();
-            if (val && !/^[a-zA-Z0-9._/-]+$/.test(val)) {
-                modelIdError.textContent = 'Use only letters, numbers, dots, hyphens, underscores, forward slashes';
-                modelIdError.style.display = 'block';
-                modelInput.style.borderColor = '#ef4444';
-            }
-            else {
-                modelIdError.style.display = 'none';
-                modelInput.style.borderColor = '#3f3f46';
-            }
-        };
-        urlInput.addEventListener('input', validateUrl);
-        modelInput.addEventListener('input', () => {
-            validateModelId();
-            if (providerSelect.value === 'google') {
-                const modelId = modelInput.value.trim() || 'model-name';
-                urlInput.value = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent`;
-                validateUrl();
-            }
-        });
-        const updatePrefills = () => {
-            const val = providerSelect.value;
-            const modelId = modelInput.value.trim() || 'model-name';
-            if (val === 'google') {
-                urlInput.value = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent`;
-            }
-            else {
-                urlInput.value = prefilledUrls[val] || '';
-            }
-            // Update provider icon
-            providerIcon.style.backgroundColor = getProviderColor(val) + '18';
-            providerIcon.style.color = getProviderColor(val);
-            providerIcon.innerHTML = getProviderIcon(val);
-            // Update key requirement indicator
-            if (val === 'ollama') {
-                keyContainer.style.display = 'none';
-                keyInput.value = '';
-                keyRequired.style.display = 'none';
-                modelInput.placeholder = 'e.g. llama3';
-                nameInput.placeholder = 'e.g. Llama 3 (Ollama)';
-            }
-            else {
-                keyContainer.style.display = 'flex';
-                keyRequired.style.display = 'inline';
-                if (val === 'openai') {
-                    modelInput.placeholder = 'e.g. gpt-4o';
-                    nameInput.placeholder = 'e.g. GPT-4o (OpenAI)';
-                }
-                else if (val === 'anthropic') {
-                    modelInput.placeholder = 'e.g. claude-3-5-sonnet-latest';
-                    nameInput.placeholder = 'e.g. Claude 3.5 Sonnet';
-                }
-                else if (val === 'google') {
-                    modelInput.placeholder = 'e.g. gemini-2.0-flash';
-                    nameInput.placeholder = 'e.g. Gemini 2.0 Flash';
-                }
-                else {
-                    modelInput.placeholder = 'e.g. model-name';
-                    nameInput.placeholder = 'e.g. My Custom Model';
-                }
-            }
-            validateUrl();
-        };
-        providerSelect.addEventListener('change', updatePrefills);
-        // ─── Test Connection in Modal ────────────────────
-        testBtn.addEventListener('click', async () => {
-            const provider = providerSelect.value;
-            const modelId = modelInput.value.trim();
-            const apiKey = keyInput.value.trim();
+        // Store fetched models and selected models
+        let fetchedModels = [];
+        let selectedModels = new Set();
+        let apiConfig = { provider: '', apiUrl: '', apiKey: '', allowUnauthorized: false };
+        // Step 1: Fetch models button
+        fetchModelsBtn.addEventListener('click', async () => {
             const apiUrl = urlInput.value.trim();
+            const apiKey = keyInput.value.trim();
+            const provider = providerTypeSelect.value;
             if (!apiUrl) {
-                alert('Please enter an API URL first');
+                urlError.textContent = 'Please enter an API URL';
+                urlError.style.display = 'block';
                 return;
             }
-            testBtn.disabled = true;
-            testBtn.style.cursor = 'wait';
-            testBtn.style.color = '#fbbf24';
-            testBtn.style.borderColor = '#fbbf24';
-            const originalHtml = testBtn.innerHTML;
-            testBtn.innerHTML = '<span>Testing...</span>';
-            try {
-                const result = await storageAPI.testModelConnection({
-                    apiUrl,
-                    provider,
-                    apiKey,
-                });
-                if (result.success) {
-                    urlStatus.style.backgroundColor = '#22c55e';
-                    urlStatus.title = result.message || 'Connection successful!';
-                    testBtn.style.color = '#22c55e';
-                    testBtn.style.borderColor = '#22c55e';
-                }
-                else {
-                    urlStatus.style.backgroundColor = '#ef4444';
-                    urlStatus.title = result.error || 'Connection failed';
-                    testBtn.style.color = '#ef4444';
-                    testBtn.style.borderColor = '#ef4444';
-                }
-            }
-            catch (err) {
-                urlStatus.style.backgroundColor = '#ef4444';
-                urlStatus.title = 'Test connection failed';
-                testBtn.style.color = '#ef4444';
-                testBtn.style.borderColor = '#ef4444';
-            }
-            setTimeout(() => {
-                testBtn.disabled = false;
-                testBtn.style.cursor = 'pointer';
-                testBtn.style.color = '#a1a1aa';
-                testBtn.style.borderColor = '#3f3f46';
-                testBtn.innerHTML = originalHtml;
-            }, 3000);
-        });
-        saveBtn.addEventListener('click', async () => {
-            const provider = providerSelect.value;
-            const modelId = modelInput.value.trim();
-            let displayName = nameInput.value.trim();
-            const apiKey = keyInput.value.trim();
-            const apiUrl = urlInput.value.trim();
-            // Clear previous errors
-            modelIdError.style.display = 'none';
             urlError.style.display = 'none';
-            modelInput.style.borderColor = '#3f3f46';
-            urlInput.style.borderColor = '#3f3f46';
-            let hasError = false;
-            if (!modelId) {
-                modelIdError.textContent = 'Model ID is required';
-                modelIdError.style.display = 'block';
-                modelInput.style.borderColor = '#ef4444';
-                hasError = true;
-            }
-            else if (!/^[a-zA-Z0-9._/-]+$/.test(modelId)) {
-                modelIdError.textContent = 'Use only letters, numbers, dots, hyphens, underscores, forward slashes';
-                modelIdError.style.display = 'block';
-                modelInput.style.borderColor = '#ef4444';
-                hasError = true;
-            }
-            if (provider !== 'ollama' && !apiKey) {
-                alert('API Key is required.');
-                hasError = true;
-            }
-            if (!apiUrl) {
-                urlError.textContent = 'API URL is required';
-                urlError.style.display = 'block';
-                urlInput.style.borderColor = '#ef4444';
-                hasError = true;
-            }
-            else {
-                try {
-                    const u = new URL(apiUrl);
-                    if (!['http:', 'https:'].includes(u.protocol)) {
-                        urlError.textContent = 'URL must start with http:// or https://';
-                        urlError.style.display = 'block';
-                        urlInput.style.borderColor = '#ef4444';
-                        hasError = true;
-                    }
-                }
-                catch {
-                    urlError.textContent = 'Invalid URL format';
-                    urlError.style.display = 'block';
-                    urlInput.style.borderColor = '#ef4444';
-                    hasError = true;
-                }
-            }
-            if (hasError)
-                return;
-            if (!displayName) {
-                const providerNames = {
-                    openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google Studio',
-                    ollama: 'Ollama', openrouter: 'OpenRouter', custom: 'Custom',
-                    deepseek: 'DeepSeek', groq: 'Groq', mistral: 'Mistral',
-                    cerebras: 'Cerebras', kimi: 'Kimi', fireworks: 'Fireworks',
-                    lmstudio: 'LM Studio', llamacpp: 'llama.cpp', nvidia: 'NVIDIA',
-                };
-                displayName = `${modelId} (${providerNames[provider]})`;
-            }
-            const newModel = {
-                name: 'models/' + modelId,
-                displayName: displayName,
-                description: `${displayName} custom model redirected through local proxy`,
-                provider: provider,
-                apiKey: apiKey || 'none',
-                apiUrl: apiUrl,
-                externalModelName: modelId,
-            };
-            saveBtn.disabled = true;
-            saveBtn.textContent = 'Saving...';
+            fetchModelsBtn.disabled = true;
+            fetchModelsBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg> Fetching...';
+            fetchStatus.textContent = 'Connecting to API...';
+            fetchStatus.style.color = '#a1a1aa';
+            fetchStatus.style.display = 'block';
             try {
-                const res = await storageAPI.saveCustomModel(newModel);
-                if (res && res.success) {
-                    closeModal();
-                    // Re-render the custom models list immediately!
-                    await renderCustomModelsList();
-                    // Trigger native refresh button if available
-                    const refreshBtn = findRefreshButton();
-                    if (refreshBtn) {
-                        refreshBtn.click();
-                    }
+                const result = await electron_1.ipcRenderer.invoke('storage:fetch-provider-models', {
+                    apiUrl,
+                    apiKey: apiKey || undefined,
+                    provider,
+                    allowUnauthorized: allowUnauthorized.checked,
+                });
+                if (result.success && result.models && result.models.length > 0) {
+                    fetchedModels = result.models;
+                    apiConfig = { provider, apiUrl, apiKey, allowUnauthorized: allowUnauthorized.checked };
+                    fetchStatus.textContent = `Found ${result.models.length} model(s)`;
+                    fetchStatus.style.color = '#22c55e';
+                    // Transition to Step 2
+                    setTimeout(() => {
+                        step1Content.style.display = 'none';
+                        step2Content.style.display = 'flex';
+                        displayNameContainer.style.display = 'flex';
+                        step2Circle.style.backgroundColor = '#3b82f6';
+                        step2Circle.style.color = 'white';
+                        step2Text.style.color = '#e4e4e7';
+                        // Populate models list
+                        modelsList.innerHTML = '';
+                        fetchedModels.forEach((model) => {
+                            const modelCard = document.createElement('div');
+                            modelCard.style.cssText = 'padding: 12px; background-color: #27272a; border: 2px solid #3f3f46; border-radius: 8px; cursor: pointer; transition: all 0.15s ease; display: flex; align-items: center; gap: 12px;';
+                            const checkbox = document.createElement('input');
+                            checkbox.type = 'checkbox';
+                            checkbox.style.cssText = 'width: 18px; height: 18px; cursor: pointer;';
+                            checkbox.dataset.modelId = model.id;
+                            const infoDiv = document.createElement('div');
+                            infoDiv.style.cssText = 'flex: 1; display: flex; flex-direction: column; gap: 4px;';
+                            const modelName = document.createElement('div');
+                            modelName.textContent = model.name || model.id;
+                            modelName.style.cssText = 'font-size: 14px; font-weight: 500; color: #f4f4f5;';
+                            const modelId = document.createElement('div');
+                            modelId.textContent = model.id;
+                            modelId.style.cssText = 'font-size: 12px; color: #71717a;';
+                            infoDiv.appendChild(modelName);
+                            if (model.name !== model.id)
+                                infoDiv.appendChild(modelId);
+                            // Show modalities badge
+                            if (model.inputModalities && model.inputModalities.length > 0 && model.inputModalities.some(m => m !== 'text')) {
+                                const badge = document.createElement('span');
+                                badge.textContent = model.inputModalities.join(', ');
+                                badge.style.cssText = 'font-size: 10px; padding: 2px 6px; background-color: #3b82f6; color: white; border-radius: 4px; display: inline-block;';
+                                infoDiv.appendChild(badge);
+                            }
+                            modelCard.appendChild(checkbox);
+                            modelCard.appendChild(infoDiv);
+                            // Toggle selection
+                            modelCard.addEventListener('click', (e) => {
+                                if (e.target !== checkbox) {
+                                    checkbox.checked = !checkbox.checked;
+                                }
+                                if (checkbox.checked) {
+                                    selectedModels.add(model.id);
+                                    modelCard.style.borderColor = '#22c55e';
+                                    modelCard.style.backgroundColor = '#22c55e18';
+                                }
+                                else {
+                                    selectedModels.delete(model.id);
+                                    modelCard.style.borderColor = '#3f3f46';
+                                    modelCard.style.backgroundColor = '#27272a';
+                                }
+                                updateSelectedDisplay();
+                            });
+                            modelsList.appendChild(modelCard);
+                        });
+                    }, 500);
                 }
                 else {
-                    alert('Failed to save model: ' + (res?.error || 'Unknown error'));
-                    saveBtn.disabled = false;
-                    saveBtn.textContent = 'Save Model';
+                    fetchStatus.textContent = result.error || 'No models found';
+                    fetchStatus.style.color = '#ef4444';
                 }
             }
             catch (err) {
-                alert('Error saving model: ' + err.message);
+                fetchStatus.textContent = 'Error: ' + err.message;
+                fetchStatus.style.color = '#ef4444';
+            }
+            finally {
+                setTimeout(() => {
+                    fetchModelsBtn.disabled = false;
+                    fetchModelsBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="16 8 12 12 8 8"/><line x1="12" y1="16" x2="12" y2="12"/></svg> Fetch Available Models';
+                }, 1000);
+            }
+        });
+        // Update selected models display
+        const updateSelectedDisplay = () => {
+            if (selectedModels.size > 0) {
+                selectedModelsDiv.style.display = 'flex';
+                selectedListDiv.textContent = `${selectedModels.size} model(s) selected`;
+                saveBtn.style.display = 'block';
+            }
+            else {
+                selectedModelsDiv.style.display = 'none';
+                saveBtn.style.display = 'none';
+            }
+        };
+        // Back to step 1
+        backToStep1Btn.addEventListener('click', () => {
+            step2Content.style.display = 'none';
+            step1Content.style.display = 'flex';
+            displayNameContainer.style.display = 'none';
+            step2Circle.style.backgroundColor = '#3f3f46';
+            step2Circle.style.color = '#71717a';
+            step2Text.style.color = '#71717a';
+            selectedModels.clear();
+            updateSelectedDisplay();
+        });
+        // Save selected models
+        saveBtn.addEventListener('click', async () => {
+            if (selectedModels.size === 0) {
+                fetchStatus.textContent = 'Please select at least one model';
+                fetchStatus.style.color = '#ef4444';
+                return;
+            }
+            saveBtn.disabled = true;
+            saveBtn.textContent = 'Adding models...';
+            const suffix = displayNameSuffix.value.trim();
+            const modelsToAdd = fetchedModels.filter(m => selectedModels.has(m.id));
+            try {
+                for (const model of modelsToAdd) {
+                    const displayName = model.name + (suffix ? ` ${suffix}` : '');
+                    await electron_1.ipcRenderer.invoke('storage:add-custom-model', {
+                        name: model.id,
+                        displayName,
+                        provider: apiConfig.provider,
+                        apiKey: apiConfig.apiKey,
+                        apiUrl: apiConfig.apiUrl,
+                        externalModelName: model.id,
+                        allowUnauthorized: apiConfig.allowUnauthorized,
+                        inputModalities: model.inputModalities || ['text'],
+                    });
+                }
+                // Success - reload models and close
+                closeModal();
+            }
+            catch (err) {
+                fetchStatus.textContent = 'Error: ' + err.message;
+                fetchStatus.style.color = '#ef4444';
                 saveBtn.disabled = false;
-                saveBtn.textContent = 'Save Model';
+                saveBtn.textContent = 'Add Selected Models';
             }
         });
     }
+    ;
+    // Close add model modal if open
+    const closeAddModelModal = () => {
+        const existingOverlay = document.getElementById('agy-modal-overlay');
+        if (existingOverlay) {
+            existingOverlay.remove();
+        }
+    };
     // Efficient DOM tracking via MutationObserver — instead of setInterval
     let injectionObserver = null;
     let injectionDebounceTimer = null;

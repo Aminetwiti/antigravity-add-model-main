@@ -23,73 +23,30 @@ if (ORIGINAL_URL.length !== PATCHED_URL.length) {
 
 /** Returns the current patch status of the language server binary. */
 export function getPatchStatus(installDir?: string): PatchStatus {
-  const binaryPath = getLanguageServerBinary(installDir);
-  const backupPath = getLanguageServerBackup(installDir);
-  if (!binaryPath) {
-    return {
-      binaryPath: null,
-      exists: false,
-      applied: false,
-      backupExists: false,
-    };
-  }
-  const exists = fs.existsSync(binaryPath);
-  const backupExists = backupPath ? fs.existsSync(backupPath) : false;
-  if (!exists) {
-    return { binaryPath, exists: false, applied: false, backupExists };
-  }
-  const buf = fs.readFileSync(binaryPath);
-  const haystack = buf.toString('binary');
-  const applied = haystack.includes(PATCHED_URL);
+  // Use version-aware patch detection
+  const { getVersionAwarePatchStatus } = require('./version-specific-patch');
+  const versionAwareStatus = getVersionAwarePatchStatus(installDir);
+  
+  // Return legacy PatchStatus format for backward compatibility
   return {
-    binaryPath,
-    exists: true,
-    applied,
-    backupExists,
-    originalUrl: ORIGINAL_URL,
-    patchedUrl: PATCHED_URL,
+    binaryPath: versionAwareStatus.binaryPath,
+    exists: versionAwareStatus.exists,
+    applied: versionAwareStatus.applied,
+    backupExists: versionAwareStatus.backupExists,
+    originalUrl: versionAwareStatus.originalUrl ?? ORIGINAL_URL,
+    patchedUrl: versionAwareStatus.patchedUrl ?? PATCHED_URL,
   };
 }
 
 /**
  * Apply the binary patch. Creates a backup first if it doesn't exist.
  * Returns true if the binary was modified, false if already patched.
+ * Now uses version-aware patching to select the correct patch for the installed version.
  */
 export function applyPatch(installDir?: string): { ok: boolean; message: string } {
-  const binaryPath = getLanguageServerBinary(installDir);
-  if (!binaryPath || !fs.existsSync(binaryPath)) {
-    return { ok: false, message: 'Language server binary not found' };
-  }
-  const buf = fs.readFileSync(binaryPath);
-  const haystack = buf.toString('binary');
-  if (haystack.includes(PATCHED_URL)) {
-    return { ok: true, message: 'Already patched' };
-  }
-  const idx = haystack.indexOf(ORIGINAL_URL);
-  if (idx === -1) {
-    return { ok: false, message: 'Original URL not found in binary (incompatible version?)' };
-  }
-  const backupPath = binaryPath + '.bak';
-  if (!fs.existsSync(backupPath)) {
-    try {
-      fs.copyFileSync(binaryPath, backupPath);
-    } catch (e) {
-      return { ok: false, message: `Failed to create backup: ${(e as Error).message}` };
-    }
-  }
-  const target = Buffer.from(PATCHED_URL, 'binary');
-  const out = Buffer.from(buf);
-  target.copy(out, idx);
-  try {
-    fs.writeFileSync(binaryPath, out);
-  } catch (e) {
-    const err = e as NodeJS.ErrnoException;
-    if (err.code === 'EBUSY') {
-      return { ok: false, message: 'language_server is running. Close Antigravity and retry.' };
-    }
-    return { ok: false, message: `Failed to write binary: ${err.message}` };
-  }
-  return { ok: true, message: `Patched (backup at ${backupPath})` };
+  // Use version-aware patching
+  const { applyVersionSpecificPatch } = require('./version-specific-patch');
+  return applyVersionSpecificPatch(installDir);
 }
 
 /** Restore the language server binary from its .bak backup. */

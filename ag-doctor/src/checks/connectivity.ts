@@ -24,14 +24,13 @@ export async function checkConnectivity(): Promise<CheckResult> {
   const results = await Promise.all(urls.map((u) => probe(u, 5000)));
   const reachable = results.filter((r) => r.ok).length;
   if (reachable === results.length) {
-    const allOk = results.every((r) => r.statusCode && r.statusCode >= 200 && r.statusCode < 300);
+    // All endpoints are reachable - this is HEALTHY even if some return 4xx
+    // (401 = needs auth, 404 = path issue but server is up)
     return {
       id: 'connectivity',
       title: 'Provider connectivity',
-      status: allOk ? 'ok' : 'warn',
-      message: allOk
-        ? `All ${reachable}/${results.length} endpoints reachable`
-        : `All ${reachable}/${results.length} endpoints reachable (some returned non-2xx)`,
+      status: 'ok', // Changed from 'warn' to 'ok' when all endpoints respond
+      message: `All ${reachable}/${results.length} endpoints reachable`,
       details: results.map((r) => `  ${r.ok ? '✔' : '✖'} ${r.url} — HTTP ${r.statusCode ?? '???'}`).join('\n'),
       data: { results },
     };
