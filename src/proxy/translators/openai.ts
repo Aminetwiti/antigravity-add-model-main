@@ -307,7 +307,7 @@ export function mapGeminiToOpenAI(geminiBody: GeminiRequestBody, modelName: stri
                 }
               }
             }
-            content = partsContent;
+            content = partsContent.length === 1 && partsContent[0].type === 'text' ? partsContent[0].text! : partsContent;
           }
           const msg: OpenAIMessage = { role, content };
           if (reasoning_content) msg.reasoning_content = reasoning_content;

@@ -887,18 +887,24 @@ window.addEventListener('DOMContentLoaded', () => {
                                 const parsed = JSON.parse(responseText);
                                 const modelsObj = (parsed.models || parsed.availableModels || parsed.available_models || {});
                                 for (const m of customModels) {
-                                    const slug = 'custom-' + (m.externalModelName || m.name || '')
+                                    const provider = (m.provider || 'custom');
+                                    const displayName = (m.displayName || m.name || '').trim();
+                                    const apiUrl = (m.apiUrl || '').trim();
+                                    const baseName = (m.externalModelName || m.name || '')
                                         .replace(/^models\//, '')
                                         .replace(/[^a-zA-Z0-9]+/g, '-')
                                         .replace(/^-+|-+$/g, '')
                                         .toLowerCase();
+                                    const uniquenessHash = hashCodeStr(`${provider}:${displayName}:${apiUrl}`);
+                                    const slug = `custom-${provider}-${baseName}-${uniquenessHash % 100000}`;
+                                    const placeholderId = 400 + (Math.abs(uniquenessHash) % 200);
                                     modelsObj[slug] = {
-                                        displayName: m.displayName || m.name,
+                                        displayName,
                                         recommended: true,
                                         maxTokens: 1048576,
                                         maxOutputTokens: 4096,
                                         tokenizerType: 'LLAMA_WITH_SPECIAL',
-                                        model: 'MODEL_PLACEHOLDER_M' + (400 + (Math.abs(hashCodeStr(m.displayName || m.name || '')) % 200)),
+                                        model: `MODEL_PLACEHOLDER_M${placeholderId}`,
                                         apiProvider: 'API_PROVIDER_GOOGLE_GEMINI',
                                         modelProvider: 'MODEL_PROVIDER_GOOGLE',
                                     };
@@ -932,18 +938,24 @@ window.addEventListener('DOMContentLoaded', () => {
                         const parsed = JSON.parse(text);
                         const modelsObj = (parsed.models || parsed.availableModels || parsed.available_models || {});
                         for (const m of customModels) {
-                            const slug = 'custom-' + (m.externalModelName || m.name || '')
+                            const provider = (m.provider || 'custom');
+                            const displayName = (m.displayName || m.name || '').trim();
+                            const apiUrl = (m.apiUrl || '').trim();
+                            const baseName = (m.externalModelName || m.name || '')
                                 .replace(/^models\//, '')
                                 .replace(/[^a-zA-Z0-9]+/g, '-')
                                 .replace(/^-+|-+$/g, '')
                                 .toLowerCase();
+                            const uniquenessHash = hashCodeStr(`${provider}:${displayName}:${apiUrl}`);
+                            const slug = `custom-${provider}-${baseName}-${uniquenessHash % 100000}`;
+                            const placeholderId = 400 + (Math.abs(uniquenessHash) % 200);
                             modelsObj[slug] = {
-                                displayName: m.displayName || m.name,
+                                displayName,
                                 recommended: true,
                                 maxTokens: 1048576,
                                 maxOutputTokens: 4096,
                                 tokenizerType: 'LLAMA_WITH_SPECIAL',
-                                model: 'MODEL_PLACEHOLDER_M' + (400 + (Math.abs(hashCodeStr(m.displayName || m.name || '')) % 200)),
+                                model: `MODEL_PLACEHOLDER_M${placeholderId}`,
                                 apiProvider: 'API_PROVIDER_GOOGLE_GEMINI',
                                 modelProvider: 'MODEL_PROVIDER_GOOGLE',
                             };

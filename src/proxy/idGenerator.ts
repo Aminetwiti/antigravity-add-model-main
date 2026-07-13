@@ -19,12 +19,13 @@ export const PLACEHOLDER_ID_RANGE = 200;
  * The same input always produces the same output (idempotent), enabling
  * consistent references across requests.
  *
- * NOTE: Includes provider in hash to ensure unique IDs when multiple models
- * share the same displayName but use different providers.
+ * NOTE: Includes provider, apiUrl, externalModelName and displayName in the hash
+ * to ensure unique IDs when multiple models share the same displayName but use
+ * different providers or endpoints.
  */
 export function generateModelPlaceholderId(model: CustomModel): string {
-  // Include provider to ensure uniqueness across providers
-  const input = `${model.provider}-${model.displayName || model.name || 'custom-model'}`.toLowerCase();
+  // Include provider, apiUrl, and externalModelName to ensure uniqueness
+  const input = `${model.provider}-${model.apiUrl}-${model.externalModelName}-${model.displayName || model.name || 'custom-model'}`.toLowerCase();
   let hash = 5381;
   for (let i = 0; i < input.length; i++) {
     hash = (hash << 5) + hash + input.charCodeAt(i);
@@ -36,15 +37,20 @@ export function generateModelPlaceholderId(model: CustomModel): string {
 
 /**
  * Generates a URL-safe slug for a custom model.
- * Used for routing and identification.
+ * Used for routing and identification (and as the key in the injected models map).
+ *
+ * NOTE: provider is included in the slug so that two models which share the same
+ * apiUrl + externalModelName but use a DIFFERENT provider get distinct slugs.
+ * Without this, the models map (keyed by slug) collides and only the last-added
+ * model appears in the Antigravity model dropdown.
  */
 export function toSlug(model: CustomModel): string {
-  return (
-    'custom-' +
-    (model.externalModelName || model.name)
-      .replace(/^models\//, '')
-      .replace(/[^a-zA-Z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .toLowerCase()
-  );
+  const provider = (model.provider || 'custom').toLowerCase();
+  const input = `${provider}-${model.apiUrl}-${model.externalModelName || model.name}`
+    .replace(/^models\//, '')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase();
+
+  return `custom-${input}`;
 }

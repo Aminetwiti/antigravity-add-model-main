@@ -15,7 +15,6 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "moduleResolution": "node",
-    "ignoreDeprecations": "6.0",
     "allowJs": false,
     "checkJs": false,
     "noImplicitAny": false,

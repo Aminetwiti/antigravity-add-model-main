@@ -184,7 +184,7 @@ function mapGeminiToOpenAI(geminiBody, modelName) {
                                 }
                             }
                         }
-                        content = partsContent;
+                        content = partsContent.length === 1 && partsContent[0].type === 'text' ? partsContent[0].text : partsContent;
                     }
                     const msg = { role, content };
                     if (reasoning_content)

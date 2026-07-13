@@ -178,7 +178,13 @@ function mapGeminiToAnthropic(geminiBody, modelName) {
                                 }
                             }
                         }
-                        content = partsContent;
+                        // Preserve legacy behavior: a single plain-text part stays a string.
+                        if (partsContent.length === 1 && partsContent[0].type === 'text') {
+                            content = partsContent[0].text;
+                        }
+                        else {
+                            content = partsContent;
+                        }
                     }
                     if (roleStr === 'system') {
                         system = (system || '') + '\n' + (Array.isArray(content) ? content.map((c) => (c.type === 'text' ? c.text || '' : '')).join('\n') : content);

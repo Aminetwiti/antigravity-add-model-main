@@ -5,6 +5,7 @@
  */
 
 import { contextBridge, ipcRenderer, webFrame } from 'electron';
+import { generateModelPlaceholderId, toSlug } from './proxy/idGenerator';
 
 // ─── Type Declarations for APIs exposed to renderer ──────────────────────────
 
@@ -1016,7 +1017,7 @@ window.addEventListener('DOMContentLoaded', () => {
         for (const model of modelsToAdd) {
           const displayName = model.name + (suffix ? ` ${suffix}` : '');
           
-          await ipcRenderer.invoke('storage:add-custom-model', {
+          await ipcRenderer.invoke('storage:save-custom-model', {
             name: model.id,
             displayName,
             provider: apiConfig.provider,
@@ -1140,19 +1141,10 @@ window.addEventListener('DOMContentLoaded', () => {
                 const parsed = JSON.parse(responseText) as Record<string, unknown>;
                 const modelsObj = (parsed.models || parsed.availableModels || parsed.available_models || {}) as Record<string, unknown>;
                 for (const m of customModels) {
-                  const provider = (m.provider || 'custom') as string;
-                  const displayName = ((m.displayName || m.name || '') as string).trim();
-                  const apiUrl = ((m.apiUrl || '') as string).trim();
-                  const baseName = ((m.externalModelName || m.name || '') as string)
-                    .replace(/^models\//, '')
-                    .replace(/[^a-zA-Z0-9]+/g, '-')
-                    .replace(/^-+|-+$/g, '')
-                    .toLowerCase();
-                  const uniquenessHash = hashCodeStr(`${provider}:${displayName}:${apiUrl}`);
-                  const slug = `custom-${provider}-${baseName}-${uniquenessHash % 100000}`;
-                  const placeholderId = 400 + (Math.abs(hashCodeStr(`${provider}-${displayName}`)) % 200);
+                  const slug = toSlug(m);
+                  const placeholderId = generateModelPlaceholderId(m);
                   (modelsObj as Record<string, unknown>)[slug] = {
-                    displayName,
+                    displayName: m.displayName || m.name,
                     recommended: true,
                     maxTokens: 1048576,
                     maxOutputTokens: 4096,
@@ -1191,19 +1183,10 @@ window.addEventListener('DOMContentLoaded', () => {
             const parsed = JSON.parse(text) as Record<string, unknown>;
             const modelsObj = (parsed.models || parsed.availableModels || parsed.available_models || {}) as Record<string, unknown>;
             for (const m of customModels) {
-              const provider = (m.provider || 'custom') as string;
-              const displayName = ((m.displayName || m.name || '') as string).trim();
-              const apiUrl = ((m.apiUrl || '') as string).trim();
-              const baseName = ((m.externalModelName || m.name || '') as string)
-                .replace(/^models\//, '')
-                .replace(/[^a-zA-Z0-9]+/g, '-')
-                .replace(/^-+|-+$/g, '')
-                .toLowerCase();
-              const uniquenessHash = hashCodeStr(`${provider}:${displayName}:${apiUrl}`);
-              const slug = `custom-${provider}-${baseName}-${uniquenessHash % 100000}`;
-              const placeholderId = 400 + (Math.abs(hashCodeStr(`${provider}-${displayName}`)) % 200);
+              const slug = toSlug(m);
+              const placeholderId = generateModelPlaceholderId(m);
               (modelsObj as Record<string, unknown>)[slug] = {
-                displayName,
+                displayName: m.displayName || m.name,
                 recommended: true,
                 maxTokens: 1048576,
                 maxOutputTokens: 4096,
@@ -1225,14 +1208,6 @@ window.addEventListener('DOMContentLoaded', () => {
     return response;
   };
 
-  function hashCodeStr(s: string): number {
-    let h = 5381;
-    for (let i = 0; i < s.length; i++) {
-      h = (h << 5) + h + s.charCodeAt(i);
-      h = h & h;
-    }
-    return Math.abs(h);
-  }
 
   // Start the observer
   setupInjectionObserver();
