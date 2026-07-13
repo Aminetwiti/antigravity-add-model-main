@@ -1,4 +1,4 @@
-# Dependency directories
+﻿# Dependency directories
 node_modules/
 
 # Logs
@@ -32,4 +32,9 @@ ag-doctor-ui/dist/*
 ag-doctor-ui/release/*
 dist/proxy/*
 dist/
-tool/
+vendors/
+
+
+# Kimchi session scratch
+.kimchi/
+

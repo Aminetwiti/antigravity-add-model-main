@@ -1,11 +1,11 @@
-$ErrorActionPreference = 'Continue'
+﻿$ErrorActionPreference = 'Continue'
 
 $nodeCmd = Get-Command node.exe -ErrorAction SilentlyContinue
 if (-not $nodeCmd) { Write-Host 'node.exe not found in PATH' -ForegroundColor Red; exit 1 }
 $nodeExe = $nodeCmd.Source
 Write-Host ("node.exe = " + $nodeExe) -ForegroundColor DarkGray
 
-# Portable paths — derived from $PSScriptRoot and $env:TEMP, never hardcoded.
+# Portable paths â€” derived from $PSScriptRoot and $env:TEMP, never hardcoded.
 $ScriptDir = $PSScriptRoot
 $Stub = Join-Path $ScriptDir 'proxy-stub.js'
 $LogFile = Join-Path $env:TEMP 'ag-proxy-stub.log'
@@ -59,7 +59,7 @@ try {
 
 Write-Host ''
 Write-Host '== ag-doctor doctor ==' -ForegroundColor Cyan
-$agDoctor = Join-Path $ScriptDir 'ag-doctor\bin\ag-doctor.js'
+$agDoctor = Join-Path $PSScriptRoot '..\..\ag-doctor\bin\ag-doctor.js'
 if (Test-Path $agDoctor) {
   & $nodeExe $agDoctor doctor
 } else {

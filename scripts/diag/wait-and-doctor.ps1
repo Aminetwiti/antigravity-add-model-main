@@ -24,6 +24,7 @@ if (-not $ready) { Write-Host 'Port 50999 NOT reachable after 90s' -ForegroundCo
 
 Write-Host ''
 Write-Host '== ag-doctor doctor ==' -ForegroundColor Cyan
-node 'C:\Business\tools\solutions\antigravity-add-model-main\ag-doctor\bin\ag-doctor.js' doctor
+$agDoctor = Join-Path $PSScriptRoot '..\..\ag-doctor\bin\ag-doctor.js'
+node $agDoctor doctor
 
 Read-Host 'Enter to close'

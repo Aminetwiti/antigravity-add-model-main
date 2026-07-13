@@ -46,4 +46,5 @@ if (Test-Path $lsLog) {
 
 Write-Host ''
 Write-Host '== ag-doctor doctor ==' -ForegroundColor Cyan
-& $nodeExe 'C:\Business\tools\solutions\antigravity-add-model-main\ag-doctor\bin\ag-doctor.js' doctor
+$agDoctor = Join-Path $PSScriptRoot '..\..\ag-doctor\bin\ag-doctor.js'
+& $nodeExe $agDoctor doctor
