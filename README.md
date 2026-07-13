@@ -226,15 +226,43 @@ antigravity-add-model/
 ├── scripts/                       # Build, deploy, repack, MITM scripts
 │   ├── deploy/                    # OS-specific deploy scripts
 │   │   ├── deploy.ps1             # Windows
-│   │   ├── deploy.sh              # macOS
+│   │   ├── deploy.sh              # macOS wrapper (sub-builds)
+│   │   ├── deploy_from_root.ps1   # Windows variant (Yedekle + dist kopyala)
 │   │   └── deploy_linux.sh        # Linux
 │   ├── repack/                    # ASAR repack scripts
-│   │   ├── repack.ps1
+│   │   ├── repack.ps1             # Repo-root one-click (build + pack + restart)
 │   │   ├── repack_safe.sh
 │   │   └── extract_asar.js
-│   └── mitm/                      # MITM HTTPS proxy scripts
-│       ├── mitm_443.js
-│       └── start_mitm_443.ps1
+│   ├── mitm/                      # MITM HTTPS proxy scripts
+│   │   ├── mitm_443.js
+│   │   ├── start_mitm_443.ps1     # Canonical MITM launcher (admin)
+│   │   └── restart-mitm.bat       # Restart MITM with PID reset
+│   ├── proxy/                     # Local proxy runners (dev/stub)
+│   │   ├── start_server_proxy.sh
+│   │   └── start-stub.ps1         # Launches proxy-stub.js on :50999
+│   ├── recovery/                  # Fix/restore scripts (use if something breaks)
+│   │   ├── fix-all.ps1
+│   │   ├── fix-and-repack.ps1
+│   │   ├── fix-mitm.ps1
+│   │   ├── set-proxy.ps1
+│   │   └── restore-real-proxy.ps1
+│   ├── diag/                      # Diagnostic / post-repack checks
+│   │   ├── diagnose-startup.ps1
+│   │   ├── check-after-repack.ps1
+│   │   ├── wait-and-doctor.ps1
+│   │   ├── launch-antigravity-and-logs.ps1
+│   │   └── test-version-patch.ps1
+│   ├── util/                      # Generic helpers (kill PID, PR, log tail)
+│   │   ├── kill-old.bat
+│   │   ├── restart-and-watch.ps1
+│   │   ├── create_pr.bat
+│   │   └── follow-logs-wsl.sh
+│   ├── detect/                    # Antigravity install detection
+│   │   ├── detect-antigravity.ps1
+│   │   └── detect-antigravity.sh
+│   └── patch_2_2_1.js             # Surgical patcher for app.asar (v2.2.x)
+├── _archive/                      # Deprecated/stale artifacts (gitignored)
+│   └── stale-paths/               # Scripts with hardcoded paths to other machines
 ├── logs/                          # Runtime logs
 ├── archive/                       # Archived artifacts (.rar, snapshots)
 ├── src/                           # TypeScript source code (see below)
@@ -243,16 +271,27 @@ antigravity-add-model/
 │   └── icons/                     # Tray and app icons
 ├── certs/                         # Bundled TLS certificates
 ├── dist/                          # Compiled JavaScript output (gitignored)
+├── proxy-runner.js                # Standalone proxy runner (used by scripts/diag)
+├── proxy-stub.js                  # Standalone stub proxy (used by scripts/proxy/start-stub.ps1)
 ├── tsconfig.json                  # TypeScript configuration
 ├── eslint.config.mjs              # ESLint flat config
 ├── vitest.config.ts               # Vitest test configuration
 ├── package.json                   # Electron app manifest + scripts
 ├── package-lock.json              # Locked dependency tree
-├── repatch.bat                    # Windows one-click repatch + redeploy
-├── Start Antigravity MITM.bat     # Windows one-click MITM launcher (admin)
+├── repatch.bat                    # Windows one-click: build + scripts/deploy/deploy.ps1
+├── Start Antigravity MITM.bat     # Windows one-click: launches MITM proxy as admin
+├── trayTemplate.png               # Tray icon (used by src/preload.ts)
+├── trayTemplate@2x.png            # Tray icon @2x (used by src/preload.ts)
+├── icon.png                       # App icon (48 KB)
 ├── LICENSE                        # Apache-2.0
 └── README.md                      # This file
 ```
+
+> [!TIP]
+> Canonical (single source of truth) deployment scripts live in `scripts/deploy/`.
+> Any `.ps1` / `.sh` / `.bat` left at the project root is either a one-click Windows
+> launcher (`repatch.bat`, `Start Antigravity MITM.bat`) or a deprecated script kept
+> only for backward compatibility — prefer the `scripts/<category>/` versions.
 
 ### Source layout (`src/`)
 

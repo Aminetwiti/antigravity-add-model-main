@@ -27,6 +27,7 @@ logs/*.txt
 
 # Local build artifacts
 archive/
+_archive/
 ag-doctor-ui/dist/*
 ag-doctor-ui/release/*
 dist/proxy/*
