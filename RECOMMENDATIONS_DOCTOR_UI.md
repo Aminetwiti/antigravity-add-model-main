@@ -1,7 +1,7 @@
 # RECOMMENDATIONS_DOCTOR_UI — Améliorations basées sur la session du 2026-07-11
 
 > **Origine** : retour d'expérience de la résolution du bug `127.0.0.1:443
-> connection refused` sur Antigravity 2.2.1 (cf. `FIX_ERROR.md`).
+> connection refused` sur Antigravity 2.2.1 (cf. [docs/troubleshooting/install-errors.md](docs/troubleshooting/install-errors.md)).
 > **Cible** : `ag-doctor-ui/` (Electron renderer) + `ag-doctor/` (CLI).
 > **Audience** : développeurs qui maintiennent `ag-doctor-ui`.
 
@@ -86,7 +86,7 @@ function verdict(state: PatchState): { label: string; severity: 'ok'|'warn'|'err
 
 **Acceptance** : à l'ouverture du UI, l'utilisateur voit immédiatement si
 le système est fonctionnel ou pas, avec un bouton « Repair » qui lance le
-pipeline §11 de `FIX_ERROR.md`.
+pipeline décrit dans [docs/troubleshooting/mitm-443.md](docs/troubleshooting/mitm-443.md).
 
 ---
 
@@ -303,7 +303,7 @@ une table YAML/JSON :
   cause: "MITM not running"
   fix: "scripts/mitm/start_mitm_443.ps1 (admin)"
   added: 2026-07-11
-  reference: FIX_ERROR.md#10
+  reference: docs/troubleshooting/mitm-443.md
 ```
 
 **Implémentation** : `ag-doctor/src/patterns/symptoms.yml` chargé au
@@ -345,7 +345,7 @@ endpoint.
 
 ### P2.5 — Intégration directe avec les fichiers de doc
 
-**Description** : le UI affiche des extraits de `FIX_ERROR.md`,
+**Description** : le UI affiche des extraits des fichiers de `docs/troubleshooting/`,
 `TROUBLESHOOTING.md`, etc. directement dans les écrans concernés, au
 lieu de demander à l'utilisateur d'ouvrir les fichiers manuellement.
 

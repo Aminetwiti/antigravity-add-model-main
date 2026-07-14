@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = 'Continue'
+$ErrorActionPreference = 'Continue'
 
 $nodeCmd = Get-Command node.exe -ErrorAction SilentlyContinue
 if (-not $nodeCmd) { Write-Host 'node.exe not found in PATH' -ForegroundColor Red; exit 1 }

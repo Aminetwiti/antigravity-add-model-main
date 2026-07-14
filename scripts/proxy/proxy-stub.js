@@ -1,5 +1,5 @@
-﻿// Minimal HTTP stub on 127.0.0.1:50999 â€” emergency fallback when the real
-// proxy crashes (see FIX_ERROR.md section 10). Returns valid empty JSON so
+// Minimal HTTP stub on 127.0.0.1:50999 — emergency fallback when the real
+// proxy crashes (see docs/troubleshooting/mitm-443.md). Returns valid empty JSON so
 // the Go language server stops logging ECONNREFUSED, and exposes /health
 // with an X-Proxy-Stub: 1 marker so ag-doctor can detect the fallback.
 //

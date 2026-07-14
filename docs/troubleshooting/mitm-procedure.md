@@ -1,1 +1,146 @@
-﻿# MITM manual procedure + Lessons learned> Extracted from [FIX_ERROR.md](../../FIX_ERROR.md) (split for discoverability).---## 12. ProcÃ©dure manuelle complÃ¨te du MITM### 12.1 PrÃ©paration unique (une seule fois)1. **Ouvrir PowerShell en tant qu'administrateur** :   - Clic droit sur le menu DÃ©marrer â†’ Â« Terminal (Admin) Â» ou Â« Windows PowerShell (Admin) Â».2. **VÃ©rifier que le CA existe** :   ```powershell   Test-Path "C:\Users\amine\Downloads\antigravity-add-model-main\antigravity-add-model-main\certs\ca-cert.pem"   ```   Si `False`, le gÃ©nÃ©rer :   ```bash   # Depuis WSL :   cd /mnt/c/Users/amine/Downloads/antigravity-add-model-main/antigravity-add-model-main/certs   openssl req -x509 -newkey rsa:2048 -nodes -keyout ca-key.pem -out ca-cert.pem -days 3650 -subj "/CN=Antigravity MITM CA"   ```3. **Importer le CA dans le store Windows** :   ```powershell   Import-Certificate -FilePath "C:\Users\amine\Downloads\antigravity-add-model-main\antigravity-add-model-main\certs\ca-cert.pem" -CertStoreLocation Cert:\LocalMachine\Root   Import-Certificate -FilePath "C:\Users\amine\Downloads\antigravity-add-model-main\antigravity-add-model-main\certs\ca-cert.pem" -CertStoreLocation Cert:\CurrentUser\Root   ```### 12.2 Lancement Ã  chaque reboot / update AntigravityOption A â€” Script PowerShell (le plus simple) :```powershell# PowerShell ADMIN& "C:\Users\amine\Downloads\antigravity-add-model-main\antigravity-add-model-main\scripts\mitm\start_mitm_443.ps1"```Le script :- RÃ©importe le CA (idempotent)- Lance `node scripts/mitm/mitm_443.js` en foreground- Affiche les logs en temps rÃ©el dans la console- `(Ctrl+C)` pour arrÃªterOption B â€” Wrapper VBS (pour lancer sans ouvrir une console admin) :CrÃ©er `C:\Users\amine\StartAntigravityMITM.vbs` :```vbsSet WshShell = CreateObject("WScript.Shell")WshShell.Run "powershell -NoProfile -ExecutionPolicy Bypass -File ""C:\Users\amine\Downloads\antigravity-add-model-main\antigravity-add-model-main\scripts\mitm\start_mitm_443.ps1""", 1, FalseSet WshShell = Nothing```Double-clic sur le VBS â†’ UAC prompt â†’ MITM dÃ©marre.### 12.3 Troubleshooting MITM| SymptÃ´me | Cause probable | Fix ||---|---|---|| `EACCES` au lancement | Pas en admin | Relancer en admin || `EADDRINUSE` port 443 | Un autre process bind dÃ©jÃ  443 | `netstat -ano \| findstr :443` â†’ tuer le process || MITM dÃ©marre mais LS continue d'Ã©chouer | CA non trustÃ© | RÃ©importer Â§12.1 || MITM forward error vers 50999 | Proxy off | DÃ©marrer Antigravity (qui lance le proxy) || Erreur TLS cÃ´tÃ© LS | CA fingerprint mismatch | VÃ©rifier que `certs/ca-cert.pem` n'a pas Ã©tÃ© rÃ©gÃ©nÃ©rÃ© sans rÃ©import |### 12.4 Logs du MITMLes logs vont dans la console oÃ¹ le script a Ã©tÃ© lancÃ©. Pour logger dans unfichier :```powershell& node "C:\Users\amine\Downloads\antigravity-add-model-main\antigravity-add-model-main\scripts\mitm\mitm_443.js" *>&1 \| Tee-Object -FilePath "C:\Users\amine\AppData\Local\Temp\mitm-443.log"```---## 13. LeÃ§ons apprises (version corrigÃ©e)### 13.1 MITM sur 443 est OBLIGATOIRE, pas optionnel**Erreur d'analyse initiale** : lors du diagnostic du 2026-07-11 14:00, j'aiaffirmÃ© Ã  tort que le MITM n'Ã©tait pas requis. La vÃ©ritÃ© :- âœ… Le proxy sur 50999 est dÃ©marrÃ© automatiquement par `proxy-runner.js`.- âŒ Le MITM sur 443 doit Ãªtre dÃ©marrÃ© **manuellement** par l'utilisateur.- Sans MITM : `ECONNREFUSED 127.0.0.1:443` rÃ©current mÃªme si le proxy tourne.**RÃ¨gle** : avant de considÃ©rer le patch comme fonctionnel, vÃ©rifier que`127.0.0.1:443` est LISTENING (cf. Â§10.4).### 13.2 Toujours lire les logs applicatifs AVANT l'erreur rÃ©seauL'erreur `127.0.0.1:443 refused` parle rÃ©seau mais la cause est dans`main.log` :```[error] [PATCH] startProxy failed: Cannot find module '../cryptoStore'```â†’ RÃ©flexe : `grep -i "error\|fail" main.log` avant de chercher cÃ´tÃ©ports/firewall/rÃ©seau.### 13.3 Diff `dist/` du repo vs `dist/` de l'asar dÃ©ployÃ©```bashnpx -y @electron/asar list "$RES/app.asar" | sort > /tmp/asar.txtls "$REPO/dist/"*.js | xargs -n1 basename | sort > /tmp/dist.txtcomm -23 /tmp/dist.txt <(awk -F'/' '/^\/dist\/[a-zA-Z][^\/]*\.js$/ {print $3}' /tmp/asar.txt | sort)```Cette commande a rÃ©vÃ©lÃ© les 3 modules manquants.### 13.4 L'overlay complet de `dist/` n'est PAS une option sÃ»reUn repack qui copie tout `dist/` :- Remplace le `dist/main.js` patchÃ© par le `main.js` upstream (perd  l'integration TLS bypass + `require('../proxy-runner')`).- Emporte les `__mocks__/*` (mocks vitest) â†’ Electron rÃ©sout ces mocks  comme s'ils Ã©taient les vrais modules.- Emporte les `*.test.js` â†’ pollution de l'asar de production.â†’ Toujours faire un overlay **chirurgical**.### 13.5 Backup avant chaque opÃ©ration destructiveLe pattern `app.asar.pre-<operation>-<ISO>.bak` a sauvÃ© la mise plusieursfois. Ã€ garder : au minimum les 3 derniers backups.### 13.6 Versioning sÃ©mantique d'Antigravity = breaking changes| 2.0.x â†’ 2.1.0 | pas de breaking change (proxy intact) || 2.1.0 â†’ 2.2.x | **breaking** : proxy code supprimÃ© du bundle officiel || 2.2.x â†’ 2.3+ | Ã  surveiller (le pattern de Google est de rÃ©duire la surface area) |Ã€ chaque update, refaire le diagnostic de Â§3 avant d'appliquer le patch.### 13.7 Distinguer Â« l'app dÃ©marre Â» de Â« l'app fonctionne Â»SymptÃ´mes trompeurs :- App lance + fenÃªtre s'ouvre â‰  App fonctionnelle- Proxy rÃ©pond 200 sur /v1internal:listExperiments â‰  Custom models utilisables- MITM bind sur 127.0.0.2 â‰  MITM bind sur 127.0.0.1**RÃ©flexe** : faire le tour des checks de Â§10.4 + Â§11.2 Ã©tape 5 avant dedÃ©clarer le fix fonctionnel.
+# MITM manual procedure + Lessons learned
+
+> Formerly part of the consolidated `FIX_ERROR.md` troubleshooting document. For the primary diagnostic, see [install-errors.md](install-errors.md).
+
+## 12. Procédure manuelle complète du MITM
+
+### 12.1 Préparation unique (une seule fois)
+
+1. **Ouvrir PowerShell en tant qu'administrateur** :
+   - Clic droit sur le menu Démarrer → « Terminal (Admin) » ou « Windows PowerShell (Admin) ».
+
+2. **Vérifier que le CA existe** :
+   ```powershell
+   Test-Path "C:\Users\amine\Downloads\antigravity-add-model-main\antigravity-add-model-main\certs\ca-cert.pem"
+   ```
+   Si `False`, le générer :
+   ```bash
+   # Depuis WSL :
+   cd /mnt/c/Users/amine/Downloads/antigravity-add-model-main/antigravity-add-model-main/certs
+   openssl req -x509 -newkey rsa:2048 -nodes -keyout ca-key.pem -out ca-cert.pem -days 3650 -subj "/CN=Antigravity MITM CA"
+   ```
+
+3. **Importer le CA dans le store Windows** :
+   ```powershell
+   Import-Certificate -FilePath "C:\Users\amine\Downloads\antigravity-add-model-main\antigravity-add-model-main\certs\ca-cert.pem" -CertStoreLocation Cert:\LocalMachine\Root
+   Import-Certificate -FilePath "C:\Users\amine\Downloads\antigravity-add-model-main\antigravity-add-model-main\certs\ca-cert.pem" -CertStoreLocation Cert:\CurrentUser\Root
+   ```
+
+### 12.2 Lancement à chaque reboot / update Antigravity
+
+Option A — Script PowerShell (le plus simple) :
+
+```powershell
+# PowerShell ADMIN
+& "C:\Users\amine\Downloads\antigravity-add-model-main\antigravity-add-model-main\scripts\mitm\start_mitm_443.ps1"
+```
+
+Le script :
+- Réimporte le CA (idempotent)
+- Lance `node scripts/mitm/mitm_443.js` en foreground
+- Affiche les logs en temps réel dans la console
+- `(Ctrl+C)` pour arrêter
+
+Option B — Wrapper VBS (pour lancer sans ouvrir une console admin) :
+
+Créer `C:\Users\amine\StartAntigravityMITM.vbs` :
+```vbs
+Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run "powershell -NoProfile -ExecutionPolicy Bypass -File ""C:\Users\amine\Downloads\antigravity-add-model-main\antigravity-add-model-main\scripts\mitm\start_mitm_443.ps1""", 1, False
+Set WshShell = Nothing
+```
+
+Double-clic sur le VBS → UAC prompt → MITM démarre.
+
+### 12.3 Troubleshooting MITM
+
+| Symptôme | Cause probable | Fix |
+|---|---|---|
+| `EACCES` au lancement | Pas en admin | Relancer en admin |
+| `EADDRINUSE` port 443 | Un autre process bind déjà 443 | `netstat -ano \| findstr :443` → tuer le process |
+| MITM démarre mais LS continue d'échouer | CA non trusté | Réimporter [mitm-procedure.md#121-préparation-unique-une-seule fois](mitm-procedure.md) |
+| MITM forward error vers 50999 | Proxy off | Démarrer Antigravity (qui lance le proxy) |
+| Erreur TLS côté LS | CA fingerprint mismatch | Vérifier que `certs/ca-cert.pem` n'a pas été régénéré sans réimport |
+
+### 12.4 Logs du MITM
+
+Les logs vont dans la console où le script a été lancé. Pour logger dans un
+fichier :
+
+```powershell
+& node "C:\Users\amine\Downloads\antigravity-add-model-main\antigravity-add-model-main\scripts\mitm\mitm_443.js" *>&1 \| Tee-Object -FilePath "C:\Users\amine\AppData\Local\Temp\mitm-443.log"
+```
+
+---
+
+## 13. Leçons apprises (version corrigée)
+
+### 13.1 MITM sur 443 est OBLIGATOIRE, pas optionnel
+
+**Erreur d'analyse initiale** : lors du diagnostic du 2026-07-11 14:00, j'ai
+affirmé à tort que le MITM n'était pas requis. La vérité :
+
+- ✅ Le proxy sur 50999 est démarré automatiquement par `proxy-runner.js`.
+- ❌ Le MITM sur 443 doit être démarré **manuellement** par l'utilisateur.
+- Sans MITM : `ECONNREFUSED 127.0.0.1:443` récurrent même si le proxy tourne.
+
+**Règle** : avant de considérer le patch comme fonctionnel, vérifier que
+`127.0.0.1:443` est LISTENING (cf. §10.4).
+
+### 13.2 Toujours lire les logs applicatifs AVANT l'erreur réseau
+
+L'erreur `127.0.0.1:443 refused` parle réseau mais la cause est dans
+`main.log` :
+
+```
+[error] [PATCH] startProxy failed: Cannot find module '../cryptoStore'
+```
+
+→ Réflexe : `grep -i "error\|fail" main.log` avant de chercher côté
+ports/firewall/réseau.
+
+### 13.3 Diff `dist/` du repo vs `dist/` de l'asar déployé
+
+```bash
+npx -y @electron/asar list "$RES/app.asar" | sort > /tmp/asar.txt
+ls "$REPO/dist/"*.js | xargs -n1 basename | sort > /tmp/dist.txt
+comm -23 /tmp/dist.txt <(awk -F'/' '/^\/dist\/[a-zA-Z][^\/]*\.js$/ {print $3}' /tmp/asar.txt | sort)
+```
+
+Cette commande a révélé les 3 modules manquants.
+
+### 13.4 L'overlay complet de `dist/` n'est PAS une option sûre
+
+Un repack qui copie tout `dist/` :
+
+- Remplace le `dist/main.js` patché par le `main.js` upstream (perd
+  l'integration TLS bypass + `require('../proxy-runner')`).
+- Emporte les `__mocks__/*` (mocks vitest) → Electron résout ces mocks
+  comme s'ils étaient les vrais modules.
+- Emporte les `*.test.js` → pollution de l'asar de production.
+
+→ Toujours faire un overlay **chirurgical**.
+
+### 13.5 Backup avant chaque opération destructive
+
+Le pattern `app.asar.pre-<operation>-<ISO>.bak` a sauvé la mise plusieurs
+fois. À garder : au minimum les 3 derniers backups.
+
+### 13.6 Versioning sémantique d'Antigravity = breaking changes
+
+| 2.0.x → 2.1.0 | pas de breaking change (proxy intact) |
+| 2.1.0 → 2.2.x | **breaking** : proxy code supprimé du bundle officiel |
+| 2.2.x → 2.3+ | à surveiller (le pattern de Google est de réduire la surface area) |
+
+À chaque update, refaire le diagnostic de [install-errors.md#3-diagnostic-timeline-de-la-résolution](install-errors.md) avant d'appliquer le patch.
+
+### 13.7 Distinguer « l'app démarre » de « l'app fonctionne »
+
+Symptômes trompeurs :
+- App lance + fenêtre s'ouvre ≠ App fonctionnelle
+- Proxy répond 200 sur /v1internal:listExperiments ≠ Custom models utilisables
+- MITM bind sur 127.0.0.2 ≠ MITM bind sur 127.0.0.1
+
+**Réflexe** : faire le tour des checks de [mitm-443.md](mitm-443.md) étape 5 avant de
+déclarer le fix fonctionnel.
+

@@ -1,4 +1,4 @@
-﻿# Quick Reference: Top 5 commands
+# Quick Reference: Top 5 commands
 
 > Speed dial. Full details in [README.md](../README.md) and [TROUBLESHOOTING.md](../TROUBLESHOOTING.md).
 
@@ -56,4 +56,4 @@ npm run doctor:logs     # tail -f language_server.log
 | Repack | `npm run repack:win` | `npm run repack:mac` | `npm run repack:linux` |
 | MITM | `npm run start:mitm` (admin) | manual `bash scripts/deploy/deploy.sh` | N/A |
 
-> On macOS/Linux, MITM 443 is not automated. See [FIX_ERROR.md section 12](../FIX_ERROR.md) for the manual procedure.
+> On macOS/Linux, MITM 443 is not automated. See [troubleshooting/mitm-procedure.md](troubleshooting/mitm-procedure.md) for the manual procedure.
