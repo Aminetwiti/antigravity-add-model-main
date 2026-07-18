@@ -117,10 +117,14 @@ export const PUBLIC_DNS_SERVERS = ['8.8.8.8', '1.1.1.1', '8.8.4.4'];
 export const HTTP_STATUS = {
   OK: 200,
   BAD_REQUEST: 400,
+  UNAUTHORIZED: 401,
+  PAYMENT_REQUIRED: 402,
+  FORBIDDEN: 403,
   PAYLOAD_TOO_LARGE: 413,
-  GATEWAY_TIMEOUT: 504,
-  BAD_GATEWAY: 502,
+  TOO_MANY_REQUESTS: 429,
   INTERNAL_SERVER_ERROR: 500,
+  BAD_GATEWAY: 502,
+  GATEWAY_TIMEOUT: 504,
 } as const;
 
 // ─── Google API Hosts ─────────────────────────────────────────────────────

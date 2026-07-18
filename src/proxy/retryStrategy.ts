@@ -62,6 +62,20 @@ export function computeRetryDelay(
 }
 
 /**
+ * Determines whether a given status code is retryable.
+ *
+ * @param statusCode HTTP status code from upstream
+ * @returns True if the status code is eligible for retry
+ */
+export function isRetryableStatus(statusCode: number): boolean {
+  // 5xx server errors
+  if (statusCode >= 500 && statusCode < 600) return true;
+  // 429 rate limit
+  if (statusCode === 429) return true;
+  return false;
+}
+
+/**
  * Determines whether a retry should be attempted for a given status code.
  *
  * @param statusCode HTTP status code from upstream
@@ -75,11 +89,7 @@ export function shouldRetryStatus(
   maxRetries: number,
 ): boolean {
   if (retryCount >= maxRetries) return false;
-  // 5xx server errors
-  if (statusCode >= 500 && statusCode < 600) return true;
-  // 429 rate limit
-  if (statusCode === 429) return true;
-  return false;
+  return isRetryableStatus(statusCode);
 }
 
 /**

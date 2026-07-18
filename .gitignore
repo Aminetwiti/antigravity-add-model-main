@@ -1,4 +1,4 @@
-﻿# Dependency directories
+# Dependency directories
 node_modules/
 
 # Logs
@@ -37,4 +37,8 @@ vendors/
 
 # Kimchi session scratch
 .kimchi/
+
+# Fichiers binaires non-UTF8 (causent des erreurs de patch Antigravity)
+scripts/freebuff/extraction-output.txt
+scripts/freebuff/pkce-output.txt
 

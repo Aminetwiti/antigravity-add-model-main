@@ -74,10 +74,14 @@ export declare const PUBLIC_DNS_SERVERS: string[];
 export declare const HTTP_STATUS: {
     readonly OK: 200;
     readonly BAD_REQUEST: 400;
+    readonly UNAUTHORIZED: 401;
+    readonly PAYMENT_REQUIRED: 402;
+    readonly FORBIDDEN: 403;
     readonly PAYLOAD_TOO_LARGE: 413;
-    readonly GATEWAY_TIMEOUT: 504;
-    readonly BAD_GATEWAY: 502;
+    readonly TOO_MANY_REQUESTS: 429;
     readonly INTERNAL_SERVER_ERROR: 500;
+    readonly BAD_GATEWAY: 502;
+    readonly GATEWAY_TIMEOUT: 504;
 };
 export declare const GOOGLE_HOSTS: {
     readonly CLOUD_CODE: "daily-cloudcode-pa.googleapis.com";

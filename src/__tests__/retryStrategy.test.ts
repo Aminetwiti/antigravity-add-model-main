@@ -3,6 +3,7 @@ import {
   computeRetryDelay,
   shouldRetryStatus,
   buildRetryDecision,
+  isRetryableStatus,
   type RetryStrategy,
 } from '../proxy/retryStrategy';
 import {
@@ -53,6 +54,28 @@ describe('computeRetryDelay', () => {
       expect(computeRetryDelay('rate-limit', 1, 0)).toBe(RATE_LIMIT_RETRY_BASE_DELAY_MS * 2);
       expect(computeRetryDelay('rate-limit', 2, 0)).toBe(RATE_LIMIT_RETRY_BASE_DELAY_MS * 4);
     });
+  });
+});
+
+describe('isRetryableStatus', () => {
+  it('returns true for 5xx server errors', () => {
+    expect(isRetryableStatus(500)).toBe(true);
+    expect(isRetryableStatus(502)).toBe(true);
+    expect(isRetryableStatus(503)).toBe(true);
+    expect(isRetryableStatus(504)).toBe(true);
+  });
+
+  it('returns true for 429 rate limit', () => {
+    expect(isRetryableStatus(429)).toBe(true);
+  });
+
+  it('returns false for other status codes', () => {
+    expect(isRetryableStatus(200)).toBe(false);
+    expect(isRetryableStatus(400)).toBe(false);
+    expect(isRetryableStatus(401)).toBe(false);
+    expect(isRetryableStatus(402)).toBe(false);
+    expect(isRetryableStatus(403)).toBe(false);
+    expect(isRetryableStatus(404)).toBe(false);
   });
 });
 

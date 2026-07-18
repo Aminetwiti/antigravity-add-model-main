@@ -46,7 +46,6 @@ const http = __importStar(require("http"));
 const https = __importStar(require("https"));
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
-const dns = __importStar(require("dns"));
 const os = __importStar(require("os"));
 const electron_log_1 = __importDefault(require("electron-log"));
 let server = null;
@@ -63,84 +62,28 @@ const registry = __importStar(require("./proxy/registry"));
 const protoInjector_1 = require("./proxy/protoInjector");
 // Custom model loading (extracted from proxy.ts)
 const modelLoader_1 = require("./proxy/modelLoader");
+const errorClassifier_1 = require("./proxy/errorClassifier");
+const retryStrategy_1 = require("./proxy/retryStrategy");
+function generateGracefulMarkdown(diagnostic) {
+    let md = `🚨 **${diagnostic.title}**\n\n${diagnostic.message}\n\n`;
+    if (diagnostic.suggestions && diagnostic.suggestions.length > 0) {
+        md += `**Suggested Actions:**\n`;
+        diagnostic.suggestions.forEach(s => md += `- ${s}\n`);
+    }
+    if (diagnostic.actionUrl) {
+        md += `\n🔗 [Manage Billing & Credits](${diagnostic.actionUrl})`;
+    }
+    md += `\n\n<span class="ag-system-error-marker" data-type="${diagnostic.errorType}" style="display:none;"></span>`;
+    return md;
+}
 // URL construction for custom model requests (extracted from proxy.ts)
 const urlBuilder_1 = require("./proxy/urlBuilder");
 // ID generation (extracted from proxy.ts)
 const idGenerator_1 = require("./proxy/idGenerator");
 Object.defineProperty(exports, "generateModelPlaceholderId", { enumerable: true, get: function () { return idGenerator_1.generateModelPlaceholderId; } });
 Object.defineProperty(exports, "toSlug", { enumerable: true, get: function () { return idGenerator_1.toSlug; } });
-// ─── DNS bypass for upstream forwarding ───────────────────────────────────
-// The local network stack (hosts file / DNS) redirects Google Cloud Code
-// endpoints to 127.0.0.1 so the Electron app talks to this proxy. When the
-// proxy forwards upstream, we must NOT use that redirect or we connect to
-// ourselves. We use a dedicated Resolver pointed at public DNS servers, which
-// ignores both the hosts file and the local poisoned DNS.
-const googleDnsResolver = new dns.Resolver();
-googleDnsResolver.setServers(constants_1.PUBLIC_DNS_SERVERS);
-async function resolveGoogleIp(hostname) {
-    return new Promise((resolve, reject) => {
-        if (!hostname.endsWith('.googleapis.com')) {
-            dns.lookup(hostname, { family: 4 }, (err, address) => {
-                if (err || !address) {
-                    reject(err || new Error(`Could not resolve ${hostname}`));
-                }
-                else {
-                    resolve(address);
-                }
-            });
-            return;
-        }
-        // Public DNS can be unreachable on some networks/corporate firewalls.
-        // Cap the attempt at 5 seconds so the LS's own 10s deadline isn't blown.
-        let timedOut = false;
-        const timeout = setTimeout(() => {
-            timedOut = true;
-            electron_log_1.default.warn(`[Proxy] Public DNS timed out for ${hostname}, falling back to system DNS resolver`);
-            fallbackToSystemDns(hostname, resolve, reject);
-        }, 5000);
-        googleDnsResolver.resolve4(hostname, (err, addresses) => {
-            if (timedOut)
-                return;
-            clearTimeout(timeout);
-            if (err || !addresses || addresses.length === 0) {
-                electron_log_1.default.warn(`[Proxy] Public DNS failed for ${hostname}, falling back to system DNS resolver:`, err?.message);
-                fallbackToSystemDns(hostname, resolve, reject);
-                return;
-            }
-            const ip = addresses[0];
-            if (!ip || typeof ip !== 'string') {
-                electron_log_1.default.error(`[Proxy] Public DNS returned invalid address for ${hostname}:`, addresses);
-                fallbackToSystemDns(hostname, resolve, reject);
-                return;
-            }
-            electron_log_1.default.info(`[Proxy] resolveGoogleIp using ${ip} for ${hostname}`);
-            resolve(ip);
-        });
-    });
-}
-/**
- * Fallback DNS resolver for googleapis.com that bypasses the hosts file.
- * We MUST NOT use dns.lookup here because the hosts file redirects
- * *.googleapis.com to 127.0.0.1. dns.resolve4 uses the network DNS directly,
- * ignoring the hosts file, so it returns the real Google IP.
- */
-function fallbackToSystemDns(hostname, resolve, reject) {
-    dns.resolve4(hostname, (err, addresses) => {
-        if (err || !addresses || addresses.length === 0) {
-            electron_log_1.default.error(`[Proxy] System DNS resolver failed for ${hostname}:`, err?.message);
-            reject(err || new Error(`Could not resolve ${hostname}`));
-            return;
-        }
-        const ip = addresses[0];
-        if (!ip || typeof ip !== 'string') {
-            electron_log_1.default.error(`[Proxy] System DNS returned invalid address for ${hostname}:`, addresses);
-            reject(new Error(`Invalid address for ${hostname}`));
-            return;
-        }
-        electron_log_1.default.info(`[Proxy] resolveGoogleIp using system DNS ${ip} for ${hostname}`);
-        resolve(ip);
-    });
-}
+// DNS resolution bypasses the poisoned hosts file (extracted from proxy.ts)
+const dnsResolver_1 = require("./proxy/dnsResolver");
 // ─── Safe Response Helpers ─────────────────────────────────────────────────
 // Guard flag pattern to prevent ERR_HTTP_HEADERS_SENT when timeout and
 // upstream response race. Returns true if the operation succeeded, false if
@@ -180,7 +123,7 @@ async function proxyToGoogle(req, res, reqBody) {
     const targetUrl = `https://${targetHost}`;
     const parsedUrl = new URL(req.url, targetUrl);
     try {
-        const realIp = await resolveGoogleIp(targetHost);
+        const realIp = await (0, dnsResolver_1.resolveGoogleIp)(targetHost);
         parsedUrl.hostname = realIp;
     }
     catch (e) {
@@ -381,8 +324,12 @@ function handleCustomModelRequest(res, model, geminiBody, isStream, retryCount =
     const request = client.request(url, options, (apiRes) => {
         apiRes.on('error', (err) => {
             electron_log_1.default.error(`[Proxy] Upstream stream error for ${model.name}:`, err.message);
-            if (safeWriteHead(res, 500, { 'Content-Type': 'application/json' })) {
-                safeEnd(res, JSON.stringify({ error: { message: 'Upstream connection error: ' + err.message } }));
+            const diagnostic = (0, errorClassifier_1.classifyError)(500, err, undefined, model.provider);
+            if (safeWriteHead(res, 500, {
+                'Content-Type': 'application/json',
+                'X-AG-Error-Type': diagnostic.errorType
+            })) {
+                safeEnd(res, JSON.stringify({ error: { message: 'Upstream connection error: ' + err.message }, _agDiagnostic: diagnostic }));
             }
             else if (!res.writableEnded) {
                 safeEnd(res);
@@ -416,13 +363,53 @@ function handleCustomModelRequest(res, model, geminiBody, isStream, retryCount =
                 apiRes.on('data', (chunk) => errorBody += chunk.toString());
                 apiRes.on('end', () => {
                     electron_log_1.default.error(`[Proxy] Stream API error (${apiRes.statusCode}) for ${model.name}: ${errorBody.substring(0, 300)}`);
-                    if (retryCount < MAX_RETRIES) {
+                    if ((0, retryStrategy_1.shouldRetryStatus)(apiRes.statusCode, retryCount, MAX_RETRIES)) {
                         electron_log_1.default.warn(`[Proxy] Stream error, retrying (${retryCount + 1}/${MAX_RETRIES})...`);
                         setTimeout(() => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1), 1000 * (retryCount + 1));
                         return;
                     }
-                    if (safeWriteHead(res, apiRes.statusCode, { 'Content-Type': 'application/json' })) {
-                        safeEnd(res, errorBody);
+                    const diagnostic = (0, errorClassifier_1.classifyError)(apiRes.statusCode, null, errorBody, model.provider);
+                    if (diagnostic.errorType === 'billing' || diagnostic.errorType === 'auth' || diagnostic.errorType === 'forbidden') {
+                        const errResponse = {
+                            response: {
+                                candidates: [
+                                    {
+                                        content: { parts: [{ text: generateGracefulMarkdown(diagnostic) }], role: 'model' },
+                                        finishReason: 'STOP',
+                                        index: 0,
+                                    },
+                                ],
+                            },
+                            traceId: '',
+                            metadata: {},
+                            _agDiagnostic: diagnostic
+                        };
+                        if (safeWriteHead(res, 200, {
+                            'Content-Type': 'text/event-stream',
+                            'Cache-Control': 'no-cache',
+                            Connection: 'keep-alive',
+                            'X-AG-Error-Type': diagnostic.errorType
+                        })) {
+                            res.write('data: ' + JSON.stringify(errResponse) + '\n\n');
+                            safeEnd(res);
+                        }
+                        return;
+                    }
+                    let responseJson = { error: { message: `Upstream error: ${errorBody}` } };
+                    try {
+                        responseJson = JSON.parse(errorBody);
+                    }
+                    catch {
+                        // not JSON
+                    }
+                    if (typeof responseJson === 'object' && responseJson !== null) {
+                        responseJson._agDiagnostic = diagnostic;
+                    }
+                    if (safeWriteHead(res, apiRes.statusCode, {
+                        'Content-Type': 'application/json',
+                        'X-AG-Error-Type': diagnostic.errorType
+                    })) {
+                        safeEnd(res, JSON.stringify(responseJson));
                     }
                 });
                 return;
@@ -509,27 +496,56 @@ function handleCustomModelRequest(res, model, geminiBody, isStream, retryCount =
             let body = '';
             apiRes.on('data', (chunk) => (body += chunk));
             apiRes.on('end', () => {
-                // Retry on 5xx with exponential backoff
-                if (apiRes.statusCode >= 500 && apiRes.statusCode < 600 && retryCount < MAX_RETRIES) {
+                // Retry if eligible based on status code
+                if ((0, retryStrategy_1.shouldRetryStatus)(apiRes.statusCode, retryCount, MAX_RETRIES)) {
                     const retryAfter = parseRetryAfter(apiRes.headers);
-                    const delay = retryAfter > 0 ? retryAfter : 1000 * Math.pow(2, retryCount);
-                    electron_log_1.default.warn(`[Proxy] Server error ${apiRes.statusCode} for ${model.name}, retrying in ${delay}ms (${retryCount + 1}/${MAX_RETRIES})...`);
-                    setTimeout(() => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1), delay);
-                    return;
-                }
-                // Retry on 429 with Retry-After header support + exponential backoff
-                if (apiRes.statusCode === 429 && retryCount < MAX_RETRIES) {
-                    const retryAfter = parseRetryAfter(apiRes.headers);
-                    const delay = retryAfter > 0 ? retryAfter : 2000 * Math.pow(2, retryCount);
-                    electron_log_1.default.warn(`[Proxy] Rate limited (429) for ${model.name}, retrying in ${delay}ms (${retryCount + 1}/${MAX_RETRIES})...`);
+                    const delay = retryAfter > 0 ? retryAfter : (apiRes.statusCode === 429 ? 2000 : 1000) * Math.pow(2, retryCount);
+                    electron_log_1.default.warn(`[Proxy] Upstream error status ${apiRes.statusCode} for ${model.name}, retrying in ${delay}ms (${retryCount + 1}/${MAX_RETRIES})...`);
                     setTimeout(() => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1), delay);
                     return;
                 }
                 if (apiRes.statusCode >= 400) {
                     // P0-3: Only log status code and model name, NOT response body content
                     electron_log_1.default.error(`[Proxy] API error (${apiRes.statusCode}) for ${model.name}`);
-                    if (safeWriteHead(res, apiRes.statusCode, { 'Content-Type': 'application/json' })) {
-                        safeEnd(res, body);
+                    const diagnostic = (0, errorClassifier_1.classifyError)(apiRes.statusCode, null, body, model.provider);
+                    if (diagnostic.errorType === 'billing' || diagnostic.errorType === 'auth' || diagnostic.errorType === 'forbidden') {
+                        const errResponse = {
+                            response: {
+                                candidates: [
+                                    {
+                                        content: { parts: [{ text: generateGracefulMarkdown(diagnostic) }], role: 'model' },
+                                        finishReason: 'STOP',
+                                        index: 0,
+                                    },
+                                ],
+                            },
+                            traceId: '',
+                            metadata: {},
+                            _agDiagnostic: diagnostic
+                        };
+                        if (safeWriteHead(res, 200, {
+                            'Content-Type': 'application/json',
+                            'X-AG-Error-Type': diagnostic.errorType
+                        })) {
+                            safeEnd(res, JSON.stringify(errResponse));
+                        }
+                        return;
+                    }
+                    let responseJson = { error: { message: `Upstream error: ${body}` } };
+                    try {
+                        responseJson = JSON.parse(body);
+                    }
+                    catch {
+                        // not JSON
+                    }
+                    if (typeof responseJson === 'object' && responseJson !== null) {
+                        responseJson._agDiagnostic = diagnostic;
+                    }
+                    if (safeWriteHead(res, apiRes.statusCode, {
+                        'Content-Type': 'application/json',
+                        'X-AG-Error-Type': diagnostic.errorType
+                    })) {
+                        safeEnd(res, JSON.stringify(responseJson));
                     }
                     return;
                 }
@@ -561,8 +577,12 @@ function handleCustomModelRequest(res, model, geminiBody, isStream, retryCount =
                         setTimeout(() => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1), 1000 * (retryCount + 1));
                         return;
                     }
-                    if (safeWriteHead(res, 500, { 'Content-Type': 'application/json' })) {
-                        safeEnd(res, JSON.stringify({ error: { message: 'Failed to translate model response' } }));
+                    const diagnostic = (0, errorClassifier_1.classifyError)(500, e, body, model.provider);
+                    if (safeWriteHead(res, 500, {
+                        'Content-Type': 'application/json',
+                        'X-AG-Error-Type': diagnostic.errorType
+                    })) {
+                        safeEnd(res, JSON.stringify({ error: { message: 'Failed to translate model response' }, _agDiagnostic: diagnostic }));
                     }
                 }
             });
@@ -576,8 +596,12 @@ function handleCustomModelRequest(res, model, geminiBody, isStream, retryCount =
             setTimeout(() => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1), 1000 * (retryCount + 1));
             return;
         }
-        if (safeWriteHead(res, 504, { 'Content-Type': 'application/json' })) {
-            safeEnd(res, JSON.stringify({ error: { message: `Request timeout after ${REQUEST_TIMEOUT_MS / 1000}s` } }));
+        const diagnostic = (0, errorClassifier_1.classifyError)(504, 'ETIMEDOUT', undefined, model.provider);
+        if (safeWriteHead(res, 504, {
+            'Content-Type': 'application/json',
+            'X-AG-Error-Type': diagnostic.errorType
+        })) {
+            safeEnd(res, JSON.stringify({ error: { message: `Request timeout after ${REQUEST_TIMEOUT_MS / 1000}s` }, _agDiagnostic: diagnostic }));
         }
     });
     request.on('error', (err) => {
@@ -587,6 +611,7 @@ function handleCustomModelRequest(res, model, geminiBody, isStream, retryCount =
             setTimeout(() => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1), 1000 * (retryCount + 1));
             return;
         }
+        const diagnostic = (0, errorClassifier_1.classifyError)(undefined, err, undefined, model.provider);
         if (isStream) {
             if (!res.headersSent && !res.writableEnded) {
                 const errResponse = {
@@ -601,14 +626,22 @@ function handleCustomModelRequest(res, model, geminiBody, isStream, retryCount =
                     },
                     traceId: '',
                     metadata: {},
+                    _agDiagnostic: diagnostic
                 };
+                safeWriteHead(res, 502, {
+                    'Content-Type': 'text/event-stream',
+                    'X-AG-Error-Type': diagnostic.errorType
+                });
                 res.write('data: ' + JSON.stringify(errResponse) + '\n\n');
             }
             safeEnd(res);
         }
         else {
-            if (safeWriteHead(res, 502, { 'Content-Type': 'application/json' })) {
-                safeEnd(res, JSON.stringify({ error: { message: 'Custom model request failed: ' + err.message } }));
+            if (safeWriteHead(res, 502, {
+                'Content-Type': 'application/json',
+                'X-AG-Error-Type': diagnostic.errorType
+            })) {
+                safeEnd(res, JSON.stringify({ error: { message: 'Custom model request failed: ' + err.message }, _agDiagnostic: diagnostic }));
             }
         }
     });
@@ -755,7 +788,7 @@ function handleRequest(req, res) {
             const targetUrl = `https://${targetHost}`;
             let parsedUrl;
             try {
-                const realIp = await resolveGoogleIp(targetHost);
+                const realIp = await (0, dnsResolver_1.resolveGoogleIp)(targetHost);
                 parsedUrl = new URL(req.url, targetUrl);
                 parsedUrl.hostname = realIp;
             }
@@ -1027,7 +1060,7 @@ function handleRequest(req, res) {
             const targetUrl = `https://${targetHost}`;
             let parsedUrl;
             try {
-                const realIp = await resolveGoogleIp(targetHost);
+                const realIp = await (0, dnsResolver_1.resolveGoogleIp)(targetHost);
                 parsedUrl = new URL(req.url, targetUrl);
                 parsedUrl.hostname = realIp;
             }
