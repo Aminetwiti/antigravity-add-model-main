@@ -712,366 +712,283 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   function openProviderManagerModal(): void {
-    const existing = document.getElementById('agy-modal-overlay');
-    if (existing) existing.remove();
+  const existing = document.getElementById('agy-modal-overlay');
+  if (existing) existing.remove();
 
-    const overlay = document.createElement('div');
-    overlay.id = 'agy-modal-overlay';
-    overlay.style.cssText = `
-      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-      background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(6px); z-index: 999999;
-      display: flex; justify-content: center; align-items: center;
-      opacity: 1; transition: opacity 0.2s ease;
-    `;
+  const overlay = document.createElement('div');
+  overlay.id = 'agy-modal-overlay';
+  overlay.style.cssText = `
+    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+    background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(6px); z-index: 999999;
+    display: flex; justify-content: center; align-items: center;
+  `;
 
-    const modal = document.createElement('div');
-    modal.style.cssText = `
-      background: #18181b; border: 1px solid #3f3f46; border-radius: 12px;
-      width: 650px; max-height: 85vh; display: flex; flex-direction: column;
-      box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); overflow: hidden; color: #f4f4f5;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      transform: scale(1) translateY(0); opacity: 1; transition: transform 0.2s ease, opacity 0.2s ease;
-      outline: none;
-    `;
+  const modal = document.createElement('div');
+  modal.style.cssText = `
+    background: #18181b; border: 1px solid #3f3f46; border-radius: 12px;
+    width: 650px; max-height: 85vh; display: flex; flex-direction: column;
+    box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); overflow: hidden; color: #f4f4f5;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  `;
 
-    const header = document.createElement('div');
-    header.style.cssText = `padding: 16px 24px; border-bottom: 1px solid #3f3f46; display: flex; justify-content: space-between; align-items: center;`;
+  const header = document.createElement('div');
+  header.style.cssText = `padding: 16px 24px; border-bottom: 1px solid #3f3f46; display: flex; justify-content: space-between; align-items: center;`;
+  
+  const titleRow = document.createElement('div');
+  titleRow.style.cssText = `display: flex; align-items: center; gap: 8px;`;
+  titleRow.innerHTML = `<h3 style="margin:0; font-size:18px; font-weight:600;">☁️ Provider Manager</h3>`;
+  
+  const closeBtn = document.createElement('button');
+  closeBtn.innerHTML = '&times;';
+  closeBtn.style.cssText = `background:none; border:none; color:#a1a1aa; font-size:24px; cursor:pointer; padding:0; line-height:1;`;
+  closeBtn.onclick = () => overlay.remove();
+  
+  header.appendChild(titleRow);
+  header.appendChild(closeBtn);
+  modal.appendChild(header);
+
+  const body = document.createElement('div');
+  body.style.cssText = `display: flex; flex-direction: column; flex: 1; overflow: hidden; position: relative;`;
+
+  const listContainer = document.createElement('div');
+  listContainer.style.cssText = `padding: 24px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 16px;`;
+
+  const formContainer = document.createElement('div');
+  formContainer.style.cssText = `padding: 24px; overflow-y: auto; flex: 1; display: none; flex-direction: column; gap: 16px; background: #1c1c1f;`;
+
+  body.appendChild(listContainer);
+  body.appendChild(formContainer);
+  modal.appendChild(body);
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  async function renderList() {
+    listContainer.style.display = 'flex';
+    formContainer.style.display = 'none';
+    listContainer.innerHTML = '';
     
-    const titleRow = document.createElement('div');
-    titleRow.style.cssText = `display: flex; align-items: center; gap: 8px;`;
-    titleRow.innerHTML = `<h3 style="margin:0; font-size:18px; font-weight:600;">Provider Manager</h3>`;
-    titleRow.setAttribute('role', 'heading');
-    titleRow.setAttribute('aria-level', '3');
+    const providers = await storageAPI.getProviders();
+
+    const topActions = document.createElement('div');
+    topActions.style.cssText = `display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;`;
     
-    const closeBtn = document.createElement('button');
-    closeBtn.style.cssText = `background:none; border:none; color:#a1a1aa; font-size:24px; cursor:pointer; padding:0; line-height:1; border-radius:4px; transition: color 0.15s ease, background-color 0.15s ease;`;
-    closeBtn.setAttribute('aria-label', 'Close provider manager');
-    closeBtn.onclick = () => overlay.remove();
+    const subtitle = document.createElement('div');
+    subtitle.style.cssText = `font-size: 14px; color: #a1a1aa;`;
+    subtitle.textContent = `${providers.length} provider(s) configured.`;
     
-    header.appendChild(titleRow);
-    header.appendChild(closeBtn);
-    modal.appendChild(header);
+    const addBtn = document.createElement('button');
+    addBtn.textContent = '+ Add Provider';
+    addBtn.style.cssText = `background: #3b82f6; border: none; color: white; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer;`;
+    addBtn.onclick = () => renderForm();
+    
+    topActions.appendChild(subtitle);
+    topActions.appendChild(addBtn);
+    listContainer.appendChild(topActions);
 
-    const body = document.createElement('div');
-    body.style.cssText = `display: flex; flex-direction: column; flex: 1; overflow: hidden; position: relative;`;
+    providers.forEach(p => {
+       const row = document.createElement('div');
+       row.style.cssText = `background: #27272a; border: 1px solid #3f3f46; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 12px;`;
+       
+       const headerRow = document.createElement('div');
+       headerRow.style.cssText = `display: flex; justify-content: space-between; align-items: center;`;
+       
+       const info = document.createElement('div');
+       info.style.cssText = `display: flex; align-items: center; gap: 8px;`;
+       const indicator = document.createElement('div');
+       indicator.style.cssText = `width: 10px; height: 10px; border-radius: 50%; background-color: ${p.enabled ? '#22c55e' : '#a1a1aa'}`;
+       const name = document.createElement('strong');
+       name.textContent = p.name;
+       name.style.fontSize = '15px';
+       info.appendChild(indicator);
+       info.appendChild(name);
+       
+       const actions = document.createElement('div');
+       actions.style.cssText = `display: flex; gap: 8px;`;
+       
+       const testBtn = document.createElement('button');
+       testBtn.textContent = '🩺 Test Health';
+       testBtn.style.cssText = `background: #3f3f46; border: 1px solid #52525b; color: white; padding: 6px 10px; border-radius: 4px; font-size: 12px; cursor: pointer;`;
+       testBtn.onclick = async () => {
+         testBtn.textContent = 'Testing...';
+         const res = await storageAPI.testModelConnection({ apiUrl: p.apiUrl, provider: p.provider, apiKey: p.apiKey, allowUnauthorized: p.allowUnauthorized });
+         testBtn.textContent = res.success ? '✅ Healthy' : '❌ Error: ' + res.status;
+         setTimeout(() => { testBtn.textContent = '🩺 Test Health'; }, 3000);
+       };
 
-    const listContainer = document.createElement('div');
-    listContainer.style.cssText = `padding: 24px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 16px;`;
+       const editBtn = document.createElement('button');
+       editBtn.textContent = '⚙️ Edit';
+       editBtn.style.cssText = testBtn.style.cssText;
+       editBtn.onclick = () => renderForm(p);
 
-    const formContainer = document.createElement('div');
-    formContainer.style.cssText = `padding: 24px; overflow-y: auto; flex: 1; display: none; flex-direction: column; gap: 16px; background: #1c1c1f;`;
+       const delBtn = document.createElement('button');
+       delBtn.textContent = '🗑️';
+       delBtn.style.cssText = testBtn.style.cssText;
+       delBtn.style.color = '#ef4444';
+       delBtn.onclick = async () => {
+          if (confirm('Delete this provider?')) {
+             await storageAPI.deleteProvider(p.id);
+             renderList();
+          }
+       };
 
-    body.appendChild(listContainer);
-    body.appendChild(formContainer);
-    modal.appendChild(body);
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-
-    // Animate in
-    if (!prefersReducedMotion()) {
-      overlay.style.opacity = '0';
-      modal.style.opacity = '0';
-      modal.style.transform = 'scale(0.9) translateY(20px)';
-      modal.style.transition = 'transform 0.2s ease, opacity 0.2s ease';
-      overlay.style.transition = 'opacity 0.2s ease';
-      requestAnimationFrame(() => {
-        overlay.style.opacity = '1';
-        modal.style.opacity = '1';
-        modal.style.transform = 'scale(1) translateY(0)';
-      });
-    } else {
-      overlay.style.opacity = '1';
-      modal.style.opacity = '1';
-      modal.style.transform = 'scale(1) translateY(0)';
-    }
-
-    const closeModalAndCleanup = () => {
-      overlay.style.opacity = '0';
-      modal.style.transform = 'scale(0.9) translateY(20px)';
-      document.removeEventListener('keydown', onKeydown);
-      setTimeout(() => overlay.remove(), 200);
-    };
-
-    document.getElementById('agy-modal-close')!.addEventListener('click', closeModalAndCleanup);
-    document.getElementById('agy-btn-cancel')!.addEventListener('click', closeModalAndCleanup);
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) closeModalAndCleanup();
+       actions.appendChild(testBtn);
+       actions.appendChild(editBtn);
+       actions.appendChild(delBtn);
+       
+       headerRow.appendChild(info);
+       headerRow.appendChild(actions);
+       
+       const subRow = document.createElement('div');
+       subRow.style.cssText = `font-size: 12px; color: #a1a1aa;`;
+       const enabledCount = p.models.filter(m => m.enabled).length;
+       subRow.textContent = `${p.provider} | ${enabledCount} model(s) enabled`;
+       
+       row.appendChild(headerRow);
+       row.appendChild(subRow);
+       listContainer.appendChild(row);
     });
-
-    const onKeydown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        closeModalAndCleanup();
-      }
-    };
-    document.addEventListener('keydown', onKeydown);
-
-    // Element references for Step 1
-    const updateSelectedDisplay = () => {
-      if (selectedModels.size > 0) {
-        selectedModelsDiv.style.display = 'flex';
-        selectedListDiv.textContent = `${selectedModels.size} model(s) selected`;
-        saveBtn.style.display = 'block';
-      } else {
-        selectedModelsDiv.style.display = 'none';
-        saveBtn.style.display = 'none';
-      }
-    };
-
-    // Back to step 1
-    backToStep1Btn.addEventListener('click', () => {
-      step2Content.style.display = 'none';
-      step1Content.style.display = 'flex';
-      displayNameContainer.style.display = 'none';
-      step2Circle.style.backgroundColor = '#3f3f46';
-      step2Circle.style.color = '#71717a';
-      step2Text.style.color = '#71717a';
-      selectedModels.clear();
-      updateSelectedDisplay();
-    });
-
-    // Save selected models
-    saveBtn.addEventListener('click', async () => {
-      if (selectedModels.size === 0) {
-        fetchStatus.textContent = 'Please select at least one model';
-        fetchStatus.style.color = '#ef4444';
-        return;
-      }
-
-      saveBtn.disabled = true;
-      saveBtn.textContent = 'Adding models...';
-
-    section.id = 'agy-custom-models-section';
-    section.style.marginTop = '24px';
-    section.style.display = 'flex';
-    section.style.flexDirection = 'column';
-    section.style.gap = '12px';
-
-    const newHeaderRow = document.createElement('div');
-    newHeaderRow.className = (headerRow as HTMLElement).className;
-    newHeaderRow.style.cssText = (headerRow as HTMLElement).style.cssText;
-    newHeaderRow.style.display = 'flex';
-    newHeaderRow.style.justifyContent = 'space-between';
-    newHeaderRow.style.alignItems = 'center';
-    newHeaderRow.style.marginBottom = '8px';
-
-    const originalHeading = headerRow.firstElementChild as HTMLElement;
-    const newHeading = document.createElement(originalHeading ? originalHeading.tagName : 'div');
-    if (originalHeading) {
-      newHeading.className = originalHeading.className;
-      newHeading.style.cssText = originalHeading.style.cssText;
-    }
-    newHeading.textContent = 'Custom Models';
-
-    const newBtnGroup = document.createElement('div');
-    const originalBtnGroup = headerRow.lastElementChild as HTMLElement;
-    if (originalBtnGroup) {
-      newBtnGroup.className = originalBtnGroup.className;
-      newBtnGroup.style.cssText = originalBtnGroup.style.cssText;
-    }
-    newBtnGroup.style.display = 'flex';
-    newBtnGroup.style.gap = '8px';
-    newBtnGroup.style.alignItems = 'center';
-
-    const addModelBtn = document.createElement('button');
-    addModelBtn.id = 'agy-add-model-btn';
-    addModelBtn.textContent = '☁️ Provider Manager';
-    const refreshBtn = findRefreshButton();
-    if (refreshBtn) {
-      addModelBtn.className = refreshBtn.className;
-      addModelBtn.style.cssText = refreshBtn.style.cssText;
-    }
-    addModelBtn.style.cursor = 'pointer';
-    addModelBtn.addEventListener('click', () => {
-      openProviderManagerModal();
-    });
-    newBtnGroup.appendChild(addModelBtn);
-    newHeaderRow.appendChild(newHeading);
-    newHeaderRow.appendChild(newBtnGroup);
-
-    const contentArea = document.createElement('div');
-    contentArea.id = 'agy-custom-models-content';
-    contentArea.style.display = 'flex';
-    contentArea.style.flexDirection = 'column';
-    contentArea.style.gap = '8px';
-
-    section.appendChild(newHeaderRow);
-    section.appendChild(contentArea);
-
-    if (contentBlock && contentBlock.nextSibling) {
-      mainContainer.insertBefore(section, contentBlock.nextSibling);
-    } else {
-      mainContainer.appendChild(section);
-    }
-
-    await renderCustomModelsList();
   }
 
-  function openProviderManagerModal(): void {
-    const existing = document.getElementById('agy-modal-overlay');
-    if (existing) existing.remove();
-
-    const overlay = document.createElement('div');
-    overlay.id = 'agy-modal-overlay';
-    overlay.style.cssText = `
-      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-      background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(6px); z-index: 999999;
-      display: flex; justify-content: center; align-items: center;
-      opacity: 1; transition: opacity 0.2s ease;
-    `;
-
-    const modal = document.createElement('div');
-    modal.style.cssText = `
-      background: #18181b; border: 1px solid #3f3f46; border-radius: 12px;
-      width: 650px; max-height: 85vh; display: flex; flex-direction: column;
-      box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); overflow: hidden; color: #f4f4f5;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      transform: scale(1) translateY(0); opacity: 1; transition: transform 0.2s ease, opacity 0.2s ease;
-      outline: none;
-    `;
-
-    const header = document.createElement('div');
-    header.style.cssText = `padding: 16px 24px; border-bottom: 1px solid #3f3f46; display: flex; justify-content: space-between; align-items: center;`;
+  function renderForm(existingProvider?: any) {
+    listContainer.style.display = 'none';
+    formContainer.style.display = 'flex';
+    formContainer.innerHTML = '';
     
-    const titleRow = document.createElement('div');
-    titleRow.style.cssText = `display: flex; align-items: center; gap: 8px;`;
-    titleRow.innerHTML = `<h3 style="margin:0; font-size:18px; font-weight:600;">Provider Manager</h3>`;
-    titleRow.setAttribute('role', 'heading');
-    titleRow.setAttribute('aria-level', '3');
-    
-    const closeBtn = document.createElement('button');
-    closeBtn.style.cssText = `background:none; border:none; color:#a1a1aa; font-size:24px; cursor:pointer; padding:0; line-height:1; border-radius:4px; transition: color 0.15s ease, background-color 0.15s ease;`;
-    closeBtn.setAttribute('aria-label', 'Close provider manager');
-    closeBtn.onclick = () => overlay.remove();
-    
-    header.appendChild(titleRow);
-    header.appendChild(closeBtn);
-    modal.appendChild(header);
-
-    const body = document.createElement('div');
-    body.style.cssText = `display: flex; flex-direction: column; flex: 1; overflow: hidden; position: relative;`;
-
-    const listContainer = document.createElement('div');
-    listContainer.style.cssText = `padding: 24px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 16px;`;
-
-    const formContainer = document.createElement('div');
-    formContainer.style.cssText = `padding: 24px; overflow-y: auto; flex: 1; display: none; flex-direction: column; gap: 16px; background: #1c1c1f;`;
-
-    body.appendChild(listContainer);
-    body.appendChild(formContainer);
-    modal.appendChild(body);
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-
-    // Animate in
-    if (!prefersReducedMotion()) {
-      overlay.style.opacity = '0';
-      modal.style.opacity = '0';
-      modal.style.transform = 'scale(0.9) translateY(20px)';
-      modal.style.transition = 'transform 0.2s ease, opacity 0.2s ease';
-      overlay.style.transition = 'opacity 0.2s ease';
-      requestAnimationFrame(() => {
-        overlay.style.opacity = '1';
-        modal.style.opacity = '1';
-        modal.style.transform = 'scale(1) translateY(0)';
-      });
-    } else {
-      overlay.style.opacity = '1';
-      modal.style.opacity = '1';
-      modal.style.transform = 'scale(1) translateY(0)';
-    }
-
-    const closeModalAndCleanup = () => {
-      overlay.style.opacity = '0';
-      modal.style.transform = 'scale(0.9) translateY(20px)';
-      document.removeEventListener('keydown', onKeydown);
-      setTimeout(() => overlay.remove(), 200);
+    let state = existingProvider ? JSON.parse(JSON.stringify(existingProvider)) : {
+       id: 'provider-' + Date.now(),
+       name: '',
+       provider: 'openai',
+       apiUrl: 'https://api.openai.com/v1',
+       apiKey: '',
+       allowUnauthorized: false,
+       enabled: true,
+       models: []
     };
 
-    document.getElementById('agy-modal-close')!.addEventListener('click', closeModalAndCleanup);
-    document.getElementById('agy-btn-cancel')!.addEventListener('click', closeModalAndCleanup);
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) closeModalAndCleanup();
-    });
+    const headerRow = document.createElement('div');
+    headerRow.style.cssText = `display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;`;
+    const backBtn = document.createElement('button');
+    backBtn.textContent = '← Back';
+    backBtn.style.cssText = `background: transparent; border: none; color: #a1a1aa; cursor: pointer; padding: 0; font-size: 14px;`;
+    backBtn.onclick = () => renderList();
+    const title = document.createElement('div');
+    title.style.cssText = `font-size: 16px; font-weight: 600;`;
+    title.textContent = existingProvider ? 'Edit Provider' : 'Add New Provider';
+    headerRow.appendChild(backBtn);
+    headerRow.appendChild(title);
+    formContainer.appendChild(headerRow);
 
-    const onKeydown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        closeModalAndCleanup();
-      }
+    const createInput = (labelStr: string, key: string, type: string = 'text') => {
+       const w = document.createElement('div');
+       w.style.cssText = `display: flex; flex-direction: column; gap: 6px;`;
+       const l = document.createElement('label');
+       l.textContent = labelStr;
+       l.style.cssText = `font-size: 13px; font-weight: 500; color: #a1a1aa;`;
+       const i = document.createElement('input');
+       i.type = type;
+       i.value = state[key] || '';
+       i.style.cssText = `background-color: #27272a; border: 1px solid #3f3f46; border-radius: 8px; color: #f4f4f5; padding: 10px 12px; font-size: 14px; outline: none;`;
+       i.onchange = (e) => state[key] = (e.target as HTMLInputElement).value;
+       w.appendChild(l);
+       w.appendChild(i);
+       return { wrapper: w, input: i };
     };
-    document.addEventListener('keydown', onKeydown);
 
-    // Element references for Step 1
-    const updateSelectedDisplay = () => {
-      if (selectedModels.size > 0) {
-        selectedModelsDiv.style.display = 'flex';
-        selectedListDiv.textContent = `${selectedModels.size} model(s) selected`;
-        saveBtn.style.display = 'block';
-      } else {
-        selectedModelsDiv.style.display = 'none';
-        saveBtn.style.display = 'none';
-      }
+    const nameInp = createInput('Provider Name (e.g. My OpenRouter)', 'name');
+    const urlInp = createInput('Base API URL (e.g. https://openrouter.ai/api/v1)', 'apiUrl');
+    const keyInp = createInput('API Key', 'apiKey', 'password');
+    if (existingProvider) keyInp.input.placeholder = '********';
+
+    formContainer.appendChild(nameInp.wrapper);
+    formContainer.appendChild(urlInp.wrapper);
+    formContainer.appendChild(keyInp.wrapper);
+
+    // Fetch Models Section
+    const fetchRow = document.createElement('div');
+    fetchRow.style.cssText = `display: flex; align-items: center; gap: 12px; margin-top: 8px;`;
+    const fetchBtn = document.createElement('button');
+    fetchBtn.textContent = '🔄 Fetch Available Models';
+    fetchBtn.style.cssText = `background: #3f3f46; border: 1px solid #52525b; color: #f4f4f5; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer;`;
+    const fetchStatus = document.createElement('div');
+    fetchStatus.style.cssText = `font-size: 12px; color: #a1a1aa;`;
+    fetchRow.appendChild(fetchBtn);
+    fetchRow.appendChild(fetchStatus);
+    formContainer.appendChild(fetchRow);
+
+    const modelsList = document.createElement('div');
+    modelsList.style.cssText = `display: flex; flex-direction: column; gap: 8px; max-height: 200px; overflow-y: auto; background: #27272a; border: 1px solid #3f3f46; border-radius: 8px; padding: 8px;`;
+    formContainer.appendChild(modelsList);
+
+    const renderModelsList = () => {
+       modelsList.innerHTML = '';
+       if (state.models.length === 0) {
+          modelsList.innerHTML = '<div style="color:#a1a1aa; font-size:13px; text-align:center; padding: 10px;">No models found. Click fetch or save provider.</div>';
+          return;
+       }
+       state.models.forEach((m: any, idx: number) => {
+          const row = document.createElement('label');
+          row.style.cssText = `display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 4px;`;
+          const chk = document.createElement('input');
+          chk.type = 'checkbox';
+          chk.checked = m.enabled;
+          chk.onchange = (e) => state.models[idx].enabled = (e.target as HTMLInputElement).checked;
+          const lbl = document.createElement('span');
+          lbl.textContent = m.displayName || m.id;
+          lbl.style.fontSize = '13px';
+          row.appendChild(chk);
+          row.appendChild(lbl);
+          modelsList.appendChild(row);
+       });
     };
+    renderModelsList();
 
-    // Back to step 1
-    backToStep1Btn.addEventListener('click', () => {
-      step2Content.style.display = 'none';
-      step1Content.style.display = 'flex';
-      displayNameContainer.style.display = 'none';
-      step2Circle.style.backgroundColor = '#3f3f46';
-      step2Circle.style.color = '#71717a';
-      step2Text.style.color = '#71717a';
-      selectedModels.clear();
-      updateSelectedDisplay();
-    });
-
-    // Save selected models
-    saveBtn.addEventListener('click', async () => {
-      if (selectedModels.size === 0) {
-        fetchStatus.textContent = 'Please select at least one model';
-        fetchStatus.style.color = '#ef4444';
-        return;
-      }
-
-      saveBtn.disabled = true;
-      saveBtn.textContent = 'Adding models...';
-
-      const suffix = displayNameSuffix.value.trim();
-      const modelsToAdd = fetchedModels.filter(m => selectedModels.has(m.id));
-
-      try {
-        for (const model of modelsToAdd) {
-          const displayName = model.name + (suffix ? ` ${suffix}` : '');
-          
-          await ipcRenderer.invoke('storage:save-custom-model', {
-            name: model.id,
-            displayName,
-            provider: apiConfig.provider,
-            apiKey: apiConfig.apiKey,
-            apiUrl: apiConfig.apiUrl,
-            externalModelName: model.id,
-            allowUnauthorized: apiConfig.allowUnauthorized,
-            inputModalities: model.inputModalities || ['text'],
+    fetchBtn.onclick = async () => {
+       fetchBtn.textContent = 'Fetching...';
+       fetchBtn.disabled = true;
+       // Read current values from DOM in case they changed without blur
+       state.apiUrl = urlInp.input.value;
+       state.apiKey = keyInp.input.value || state.apiKey;
+       
+       const res = await storageAPI.fetchModels({ baseUrl: state.apiUrl, apiKey: state.apiKey, allowUnauthorized: state.allowUnauthorized });
+       fetchBtn.textContent = '🔄 Fetch Available Models';
+       fetchBtn.disabled = false;
+       
+       if (res.success && res.models) {
+          fetchStatus.textContent = `Found ${res.models.length} models.`;
+          fetchStatus.style.color = '#22c55e';
+          // Merge models
+          const existingMap = new Map(state.models.map((x:any) => [x.id, x]));
+          state.models = res.models.map((m:any) => {
+             const ext = existingMap.get(m.id);
+             return ext ? ext : { id: m.id, displayName: m.displayName, enabled: false };
           });
-        }
+          renderModelsList();
+       } else {
+          fetchStatus.textContent = 'Error: ' + res.error;
+          fetchStatus.style.color = '#ef4444';
+       }
+    };
 
-        // Success - reload models and close
-        closeModalAndCleanup();
-      } catch (err) {
-        fetchStatus.textContent = 'Error: ' + (err as Error).message;
-        fetchStatus.style.color = '#ef4444';
-        saveBtn.disabled = false;
-        saveBtn.textContent = 'Add Selected Models';
-      }
-    });
-  };
+    const saveRow = document.createElement('div');
+    saveRow.style.cssText = `display: flex; justify-content: flex-end; gap: 12px; margin-top: auto; padding-top: 16px; border-top: 1px solid #3f3f46;`;
+    const saveBtn = document.createElement('button');
+    saveBtn.textContent = 'Save Provider';
+    saveBtn.style.cssText = `background: #22c55e; border: none; color: white; padding: 10px 20px; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer;`;
+    saveBtn.onclick = async () => {
+       state.name = nameInp.input.value || 'Unnamed Provider';
+       state.apiUrl = urlInp.input.value;
+       state.apiKey = keyInp.input.value || state.apiKey;
+       await storageAPI.saveProvider(state);
+       renderList();
+    };
+    saveRow.appendChild(saveBtn);
+    formContainer.appendChild(saveRow);
+  }
 
-  // Close add model modal if open
-  const closeAddModelModal = () => {
-    const existingOverlay = document.getElementById('agy-modal-overlay');
-    if (existingOverlay) {
-      existingOverlay.remove();
-    }
-  };
+  renderList();
+}
+
+
   // Efficient DOM tracking via MutationObserver — instead of setInterval
   let injectionObserver: MutationObserver | null = null;
   let injectionDebounceTimer: ReturnType<typeof setTimeout> | null = null;

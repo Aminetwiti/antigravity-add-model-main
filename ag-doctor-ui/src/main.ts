@@ -25,6 +25,8 @@ const activeStreams = new Map<string, ChildProcess>();
 // F-28 FIX — Single-instance lock: prevents two ag-doctor-ui windows from
 // running simultaneously (which causes CliWorkerPool race conditions).
 // ─────────────────────────────────────────────────────────────────────────────
+// TEMPORARILY DISABLED FOR DEVELOPMENT
+/*
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   // Another instance is already running — focus it and quit this one.
@@ -38,6 +40,7 @@ if (!gotLock) {
     }
   });
 }
+*/
 
 // Disable GPU sandbox in packaged builds to avoid startup crashes on some Windows setups
 app.commandLine.appendSwitch('disable-gpu');
@@ -1131,30 +1134,30 @@ ipcMain.handle('ag:stream:cancel', (_evt, streamId: string) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // F-28: only proceed if we own the single-instance lock
-if (gotLock) {
-  app.whenReady().then(() => {
-    createWindow();
-    createTray();
+// DISABLED FOR DEVELOPMENT - app will start without lock check
+app.whenReady().then(() => {
+  createWindow();
+  createTray();
 
-    // Global shortcuts
-    mainWindow?.webContents.on('before-input-event', (_e, input) => {
-      if (input.control && input.key.toLowerCase() === 'r') {
-        mainWindow?.webContents.send('ag:run-doctor');
-      } else if (input.control && input.key.toLowerCase() === 'l') {
-        mainWindow?.webContents.send('ag:navigate', 'logs');
-      } else if (input.control && input.key.toLowerCase() === 'k') {
-        mainWindow?.webContents.send('ag:command-palette');
-      } else if (input.control && input.key.toLowerCase() === ',') {
-        mainWindow?.webContents.send('ag:navigate', 'settings');
-      }
-    });
-
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow();
-      else mainWindow?.show();
-    });
+  // Global shortcuts
+  mainWindow?.webContents.on('before-input-event', (_e, input) => {
+    if (input.control && input.key.toLowerCase() === 'r') {
+      mainWindow?.webContents.send('ag:run-doctor');
+    } else if (input.control && input.key.toLowerCase() === 'l') {
+      mainWindow?.webContents.send('ag:navigate', 'logs');
+    } else if (input.control && input.key.toLowerCase() === 'k') {
+      mainWindow?.webContents.send('ag:command-palette');
+    } else if (input.control && input.key.toLowerCase() === ',') {
+      mainWindow?.webContents.send('ag:navigate', 'settings');
+    }
   });
-}
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    else mainWindow?.show();
+  });
+});
+
 
 app.on('window-all-closed', () => {
   for (const proc of activeStreams.values()) proc.kill();

@@ -485,30 +485,25 @@ window.addEventListener('DOMContentLoaded', () => {
         const overlay = document.createElement('div');
         overlay.id = 'agy-modal-overlay';
         overlay.style.cssText = `
-      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-      background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(6px); z-index: 999999;
-      display: flex; justify-content: center; align-items: center;
-      opacity: 1; transition: opacity 0.2s ease;
-    `;
+    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+    background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(6px); z-index: 999999;
+    display: flex; justify-content: center; align-items: center;
+  `;
         const modal = document.createElement('div');
         modal.style.cssText = `
-      background: #18181b; border: 1px solid #3f3f46; border-radius: 12px;
-      width: 650px; max-height: 85vh; display: flex; flex-direction: column;
-      box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); overflow: hidden; color: #f4f4f5;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      transform: scale(1) translateY(0); opacity: 1; transition: transform 0.2s ease, opacity 0.2s ease;
-      outline: none;
-    `;
+    background: #18181b; border: 1px solid #3f3f46; border-radius: 12px;
+    width: 650px; max-height: 85vh; display: flex; flex-direction: column;
+    box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); overflow: hidden; color: #f4f4f5;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  `;
         const header = document.createElement('div');
         header.style.cssText = `padding: 16px 24px; border-bottom: 1px solid #3f3f46; display: flex; justify-content: space-between; align-items: center;`;
         const titleRow = document.createElement('div');
         titleRow.style.cssText = `display: flex; align-items: center; gap: 8px;`;
-        titleRow.innerHTML = `<h3 style="margin:0; font-size:18px; font-weight:600;">Provider Manager</h3>`;
-        titleRow.setAttribute('role', 'heading');
-        titleRow.setAttribute('aria-level', '3');
+        titleRow.innerHTML = `<h3 style="margin:0; font-size:18px; font-weight:600;">☁️ Provider Manager</h3>`;
         const closeBtn = document.createElement('button');
-        closeBtn.style.cssText = `background:none; border:none; color:#a1a1aa; font-size:24px; cursor:pointer; padding:0; line-height:1; border-radius:4px; transition: color 0.15s ease, background-color 0.15s ease;`;
-        closeBtn.setAttribute('aria-label', 'Close provider manager');
+        closeBtn.innerHTML = '&times;';
+        closeBtn.style.cssText = `background:none; border:none; color:#a1a1aa; font-size:24px; cursor:pointer; padding:0; line-height:1;`;
         closeBtn.onclick = () => overlay.remove();
         header.appendChild(titleRow);
         header.appendChild(closeBtn);
@@ -524,230 +519,265 @@ window.addEventListener('DOMContentLoaded', () => {
         modal.appendChild(body);
         overlay.appendChild(modal);
         document.body.appendChild(overlay);
-        // Animate in
-        if (!prefersReducedMotion()) {
-            overlay.style.opacity = '0';
-            modal.style.opacity = '0';
-            modal.style.transform = 'scale(0.9) translateY(20px)';
-            modal.style.transition = 'transform 0.2s ease, opacity 0.2s ease';
-            overlay.style.transition = 'opacity 0.2s ease';
-            requestAnimationFrame(() => {
-                overlay.style.opacity = '1';
-                modal.style.opacity = '1';
-                modal.style.transform = 'scale(1) translateY(0)';
+        async function renderList() {
+            listContainer.style.display = 'flex';
+            formContainer.style.display = 'none';
+            listContainer.innerHTML = '';
+            const providers = await storageAPI.getProviders();
+            const topActions = document.createElement('div');
+            topActions.style.cssText = `display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;`;
+            const subtitle = document.createElement('div');
+            subtitle.style.cssText = `font-size: 14px; color: #a1a1aa;`;
+            subtitle.textContent = `${providers.length} provider(s) configured.`;
+            const addBtn = document.createElement('button');
+            addBtn.textContent = '+ Add Provider';
+            addBtn.style.cssText = `background: #3b82f6; border: none; color: white; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer;`;
+            addBtn.onclick = () => renderForm();
+            topActions.appendChild(subtitle);
+            topActions.appendChild(addBtn);
+            listContainer.appendChild(topActions);
+            providers.forEach(p => {
+                const row = document.createElement('div');
+                row.style.cssText = `background: #27272a; border: 1px solid #3f3f46; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 12px;`;
+                const headerRow = document.createElement('div');
+                headerRow.style.cssText = `display: flex; justify-content: space-between; align-items: center;`;
+                const info = document.createElement('div');
+                info.style.cssText = `display: flex; align-items: center; gap: 8px;`;
+                const indicator = document.createElement('div');
+                indicator.style.cssText = `width: 10px; height: 10px; border-radius: 50%; background-color: ${p.enabled ? '#22c55e' : '#a1a1aa'}`;
+                const name = document.createElement('strong');
+                name.textContent = p.name;
+                name.style.fontSize = '15px';
+                info.appendChild(indicator);
+                info.appendChild(name);
+                const actions = document.createElement('div');
+                actions.style.cssText = `display: flex; gap: 8px;`;
+                const testBtn = document.createElement('button');
+                testBtn.textContent = '🩺 Test Health';
+                testBtn.style.cssText = `background: #3f3f46; border: 1px solid #52525b; color: white; padding: 6px 10px; border-radius: 4px; font-size: 12px; cursor: pointer;`;
+                testBtn.onclick = async () => {
+                    testBtn.textContent = 'Testing...';
+                    const res = await storageAPI.testModelConnection({ apiUrl: p.apiUrl, provider: p.provider, apiKey: p.apiKey, allowUnauthorized: p.allowUnauthorized });
+                    testBtn.textContent = res.success ? '✅ Healthy' : '❌ Error: ' + res.status;
+                    setTimeout(() => { testBtn.textContent = '🩺 Test Health'; }, 3000);
+                };
+                const editBtn = document.createElement('button');
+                editBtn.textContent = '⚙️ Edit';
+                editBtn.style.cssText = testBtn.style.cssText;
+                editBtn.onclick = () => renderForm(p);
+                const delBtn = document.createElement('button');
+                delBtn.textContent = '🗑️';
+                delBtn.style.cssText = testBtn.style.cssText;
+                delBtn.style.color = '#ef4444';
+                delBtn.onclick = async () => {
+                    if (confirm('Delete this provider?')) {
+                        await storageAPI.deleteProvider(p.id);
+                        renderList();
+                    }
+                };
+                actions.appendChild(testBtn);
+                actions.appendChild(editBtn);
+                actions.appendChild(delBtn);
+                headerRow.appendChild(info);
+                headerRow.appendChild(actions);
+                const subRow = document.createElement('div');
+                subRow.style.cssText = `font-size: 12px; color: #a1a1aa;`;
+                const enabledCount = p.models.filter(m => m.enabled).length;
+                subRow.textContent = `${p.provider} | ${enabledCount} model(s) enabled`;
+                row.appendChild(headerRow);
+                row.appendChild(subRow);
+                listContainer.appendChild(row);
             });
         }
-        else {
-            overlay.style.opacity = '1';
-            modal.style.opacity = '1';
-            modal.style.transform = 'scale(1) translateY(0)';
-        }
-        const closeModalAndCleanup = () => {
-            overlay.style.opacity = '0';
-            modal.style.transform = 'scale(0.9) translateY(20px)';
-            document.removeEventListener('keydown', onKeydown);
-            setTimeout(() => overlay.remove(), 200);
-        };
-        document.getElementById('agy-modal-close').addEventListener('click', closeModalAndCleanup);
-        document.getElementById('agy-btn-cancel').addEventListener('click', closeModalAndCleanup);
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay)
-                closeModalAndCleanup();
-        });
-        const onKeydown = (e) => {
-            if (e.key === 'Escape') {
-                closeModalAndCleanup();
-            }
-        };
-        document.addEventListener('keydown', onKeydown);
-        // Element references for Step 1
-        const providerTypeSelect = document.getElementById('agy-provider-type');
-        const urlInput = document.getElementById('agy-api-url');
-        const keyInput = document.getElementById('agy-api-key');
-        const allowUnauthorized = document.getElementById('agy-allow-unauthorized');
-        const fetchModelsBtn = document.getElementById('agy-fetch-models-btn');
-        const fetchStatus = document.getElementById('agy-fetch-status');
-        const urlError = document.getElementById('agy-url-error');
-        // Element references for Step 2
-        const step1Content = document.getElementById('agy-step-1-content');
-        const step2Content = document.getElementById('agy-step-2-content');
-        const step1Indicator = document.getElementById('agy-step-1-indicator');
-        const step2Indicator = document.getElementById('agy-step-2-indicator');
-        const step2Circle = document.getElementById('agy-step-2-circle');
-        const step2Text = document.getElementById('agy-step-2-text');
-        const modelsList = document.getElementById('agy-models-list');
-        const backToStep1Btn = document.getElementById('agy-back-to-step1');
-        const selectedModelsDiv = document.getElementById('agy-selected-models');
-        const selectedListDiv = document.getElementById('agy-selected-list');
-        const displayNameContainer = document.getElementById('agy-display-name-container');
-        const displayNameSuffix = document.getElementById('agy-display-name-suffix');
-        const saveBtn = document.getElementById('agy-btn-save');
-        // Store fetched models and selected models
-        let fetchedModels = [];
-        let selectedModels = new Set();
-        let apiConfig = { provider: '', apiUrl: '', apiKey: '', allowUnauthorized: false };
-        // Step 1: Fetch models button
-        fetchModelsBtn.addEventListener('click', async () => {
-            const apiUrl = urlInput.value.trim();
-            const apiKey = keyInput.value.trim();
-            const provider = providerTypeSelect.value;
-            if (!apiUrl) {
-                const result = await electron_1.ipcRenderer.invoke('storage:fetch-provider-models', {
-                    apiUrl,
-                    modelCard, : .addEventListener('click', (e) => {
-                        if (e.target !== checkbox) {
-                            checkbox.checked = !checkbox.checked;
-                        }
-                        modelsList.appendChild(modelCard);
-                    })
-                }, 500);
-            }
-            else {
-                fetchStatus.textContent = result.error || 'No models found';
-                fetchStatus.style.color = '#ef4444';
-            }
-        });
-        try { }
-        catch (err) {
-            fetchStatus.textContent = 'Error: ' + err.message;
-            fetchStatus.style.color = '#ef4444';
-        }
-        finally {
-            setTimeout(() => {
-                fetchModelsBtn.disabled = false;
-                fetchModelsBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="16 8 12 12 8 8"/><line x1="12" y1="16" x2="12" y2="12"/></svg> Fetch Available Models';
-            }, 1000);
-        }
-    }
-});
-// Update selected models display
-const updateSelectedDisplay = () => {
-    if (selectedModels.size > 0) {
-        selectedModelsDiv.style.display = 'flex';
-        selectedListDiv.textContent = `${selectedModels.size} model(s) selected`;
-        saveBtn.style.display = 'block';
-    }
-    else {
-        selectedModelsDiv.style.display = 'none';
-        saveBtn.style.display = 'none';
-    }
-};
-// Back to step 1
-backToStep1Btn.addEventListener('click', () => {
-    step2Content.style.display = 'none';
-    step1Content.style.display = 'flex';
-    displayNameContainer.style.display = 'none';
-    step2Circle.style.backgroundColor = '#3f3f46';
-    step2Circle.style.color = '#71717a';
-    step2Text.style.color = '#71717a';
-    selectedModels.clear();
-    updateSelectedDisplay();
-});
-// Save selected models
-saveBtn.addEventListener('click', async () => {
-    if (selectedModels.size === 0) {
-        fetchStatus.textContent = 'Please select at least one model';
-        fetchStatus.style.color = '#ef4444';
-        return;
-    }
-    saveBtn.disabled = true;
-    saveBtn.textContent = 'Adding models...';
-    const suffix = displayNameSuffix.value.trim();
-    const modelsToAdd = fetchedModels.filter(m => selectedModels.has(m.id));
-    try {
-        for (const model of modelsToAdd) {
-            const displayName = model.name + (suffix ? ` ${suffix}` : '');
-            await electron_1.ipcRenderer.invoke('storage:save-custom-model', {
-                name: model.id,
-                displayName,
-                provider: apiConfig.provider,
-                apiKey: apiConfig.apiKey,
-                apiUrl: apiConfig.apiUrl,
-                externalModelName: model.id,
-                allowUnauthorized: apiConfig.allowUnauthorized,
-                inputModalities: model.inputModalities || ['text'],
-            });
-        }
-        // Success - reload models and close
-        closeModalAndCleanup();
-    }
-    catch (err) {
-        fetchStatus.textContent = 'Error: ' + err.message;
-        fetchStatus.style.color = '#ef4444';
-        saveBtn.disabled = false;
-        saveBtn.textContent = 'Add Selected Models';
-    }
-});
-;
-// Close add model modal if open
-const closeAddModelModal = () => {
-    const existingOverlay = document.getElementById('agy-modal-overlay');
-    if (existingOverlay) {
-        existingOverlay.remove();
-    }
-};
-// Efficient DOM tracking via MutationObserver — instead of setInterval
-let injectionObserver = null;
-let injectionDebounceTimer = null;
-function setupInjectionObserver() {
-    // Try immediately first
-    void injectCustomModelsSection();
-    // If already added, no need for observer
-    if (document.getElementById('agy-custom-models-section'))
-        return;
-    // Set up observer: watch all changes under document.body
-    injectionObserver = new MutationObserver(() => {
-        // Debounce: coalesce consecutive mutations into a single attempt
-        if (injectionDebounceTimer)
-            clearTimeout(injectionDebounceTimer);
-        injectionDebounceTimer = setTimeout(async () => {
-            await injectCustomModelsSection();
-            // If successfully injected, stop observing
-            if (document.getElementById('agy-custom-models-section')) {
-                if (injectionObserver) {
-                    injectionObserver.disconnect();
-                    injectionObserver = null;
+        function renderForm(existingProvider) {
+            listContainer.style.display = 'none';
+            formContainer.style.display = 'flex';
+            formContainer.innerHTML = '';
+            let state = existingProvider ? JSON.parse(JSON.stringify(existingProvider)) : {
+                id: 'provider-' + Date.now(),
+                name: '',
+                provider: 'openai',
+                apiUrl: 'https://api.openai.com/v1',
+                apiKey: '',
+                allowUnauthorized: false,
+                enabled: true,
+                models: []
+            };
+            const headerRow = document.createElement('div');
+            headerRow.style.cssText = `display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;`;
+            const backBtn = document.createElement('button');
+            backBtn.textContent = '← Back';
+            backBtn.style.cssText = `background: transparent; border: none; color: #a1a1aa; cursor: pointer; padding: 0; font-size: 14px;`;
+            backBtn.onclick = () => renderList();
+            const title = document.createElement('div');
+            title.style.cssText = `font-size: 16px; font-weight: 600;`;
+            title.textContent = existingProvider ? 'Edit Provider' : 'Add New Provider';
+            headerRow.appendChild(backBtn);
+            headerRow.appendChild(title);
+            formContainer.appendChild(headerRow);
+            const createInput = (labelStr, key, type = 'text') => {
+                const w = document.createElement('div');
+                w.style.cssText = `display: flex; flex-direction: column; gap: 6px;`;
+                const l = document.createElement('label');
+                l.textContent = labelStr;
+                l.style.cssText = `font-size: 13px; font-weight: 500; color: #a1a1aa;`;
+                const i = document.createElement('input');
+                i.type = type;
+                i.value = state[key] || '';
+                i.style.cssText = `background-color: #27272a; border: 1px solid #3f3f46; border-radius: 8px; color: #f4f4f5; padding: 10px 12px; font-size: 14px; outline: none;`;
+                i.onchange = (e) => state[key] = e.target.value;
+                w.appendChild(l);
+                w.appendChild(i);
+                return { wrapper: w, input: i };
+            };
+            const nameInp = createInput('Provider Name (e.g. My OpenRouter)', 'name');
+            const urlInp = createInput('Base API URL (e.g. https://openrouter.ai/api/v1)', 'apiUrl');
+            const keyInp = createInput('API Key', 'apiKey', 'password');
+            if (existingProvider)
+                keyInp.input.placeholder = '********';
+            formContainer.appendChild(nameInp.wrapper);
+            formContainer.appendChild(urlInp.wrapper);
+            formContainer.appendChild(keyInp.wrapper);
+            // Fetch Models Section
+            const fetchRow = document.createElement('div');
+            fetchRow.style.cssText = `display: flex; align-items: center; gap: 12px; margin-top: 8px;`;
+            const fetchBtn = document.createElement('button');
+            fetchBtn.textContent = '🔄 Fetch Available Models';
+            fetchBtn.style.cssText = `background: #3f3f46; border: 1px solid #52525b; color: #f4f4f5; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer;`;
+            const fetchStatus = document.createElement('div');
+            fetchStatus.style.cssText = `font-size: 12px; color: #a1a1aa;`;
+            fetchRow.appendChild(fetchBtn);
+            fetchRow.appendChild(fetchStatus);
+            formContainer.appendChild(fetchRow);
+            const modelsList = document.createElement('div');
+            modelsList.style.cssText = `display: flex; flex-direction: column; gap: 8px; max-height: 200px; overflow-y: auto; background: #27272a; border: 1px solid #3f3f46; border-radius: 8px; padding: 8px;`;
+            formContainer.appendChild(modelsList);
+            const renderModelsList = () => {
+                modelsList.innerHTML = '';
+                if (state.models.length === 0) {
+                    modelsList.innerHTML = '<div style="color:#a1a1aa; font-size:13px; text-align:center; padding: 10px;">No models found. Click fetch or save provider.</div>';
+                    return;
                 }
-            }
-        }, 200);
-    });
-    injectionObserver.observe(document.body, {
-        childList: true,
-        subtree: true,
-    });
-}
-// URL tracking for re-injection on SPA page transitions
-let lastUrl = location.href;
-setInterval(() => {
-    const currentUrl = location.href;
-    if (currentUrl !== lastUrl) {
-        lastUrl = currentUrl;
-        // Page changed — clean up previous observer and re-initialize
-        if (injectionObserver) {
-            injectionObserver.disconnect();
-            injectionObserver = null;
+                state.models.forEach((m, idx) => {
+                    const row = document.createElement('label');
+                    row.style.cssText = `display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 4px;`;
+                    const chk = document.createElement('input');
+                    chk.type = 'checkbox';
+                    chk.checked = m.enabled;
+                    chk.onchange = (e) => state.models[idx].enabled = e.target.checked;
+                    const lbl = document.createElement('span');
+                    lbl.textContent = m.displayName || m.id;
+                    lbl.style.fontSize = '13px';
+                    row.appendChild(chk);
+                    row.appendChild(lbl);
+                    modelsList.appendChild(row);
+                });
+            };
+            renderModelsList();
+            fetchBtn.onclick = async () => {
+                fetchBtn.textContent = 'Fetching...';
+                fetchBtn.disabled = true;
+                // Read current values from DOM in case they changed without blur
+                state.apiUrl = urlInp.input.value;
+                state.apiKey = keyInp.input.value || state.apiKey;
+                const res = await storageAPI.fetchModels({ baseUrl: state.apiUrl, apiKey: state.apiKey, allowUnauthorized: state.allowUnauthorized });
+                fetchBtn.textContent = '🔄 Fetch Available Models';
+                fetchBtn.disabled = false;
+                if (res.success && res.models) {
+                    fetchStatus.textContent = `Found ${res.models.length} models.`;
+                    fetchStatus.style.color = '#22c55e';
+                    // Merge models
+                    const existingMap = new Map(state.models.map((x) => [x.id, x]));
+                    state.models = res.models.map((m) => {
+                        const ext = existingMap.get(m.id);
+                        return ext ? ext : { id: m.id, displayName: m.displayName, enabled: false };
+                    });
+                    renderModelsList();
+                }
+                else {
+                    fetchStatus.textContent = 'Error: ' + res.error;
+                    fetchStatus.style.color = '#ef4444';
+                }
+            };
+            const saveRow = document.createElement('div');
+            saveRow.style.cssText = `display: flex; justify-content: flex-end; gap: 12px; margin-top: auto; padding-top: 16px; border-top: 1px solid #3f3f46;`;
+            const saveBtn = document.createElement('button');
+            saveBtn.textContent = 'Save Provider';
+            saveBtn.style.cssText = `background: #22c55e; border: none; color: white; padding: 10px 20px; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer;`;
+            saveBtn.onclick = async () => {
+                state.name = nameInp.input.value || 'Unnamed Provider';
+                state.apiUrl = urlInp.input.value;
+                state.apiKey = keyInp.input.value || state.apiKey;
+                await storageAPI.saveProvider(state);
+                renderList();
+            };
+            saveRow.appendChild(saveBtn);
+            formContainer.appendChild(saveRow);
         }
-        // Re-initialize after a short delay (for new DOM to render)
-        setTimeout(setupInjectionObserver, 500);
+        renderList();
     }
-}, 1500);
-// --- Contextual Error Toast UI ----------------------------------------
-function showErrorToast(diagnostic) {
-    if (!document || !document.body)
-        return;
-    const existingToastId = `agy-toast-${diagnostic.errorType}`;
-    const existing = document.getElementById(existingToastId);
-    if (existing) {
-        existing.style.animation = 'none';
-        void existing.offsetWidth; // trigger reflow
-        existing.style.animation = 'agy-toast-shake 0.4s ease-in-out, agy-toast-fade-in 0.3s ease-out';
-        return;
+    // Efficient DOM tracking via MutationObserver — instead of setInterval
+    let injectionObserver = null;
+    let injectionDebounceTimer = null;
+    function setupInjectionObserver() {
+        // Try immediately first
+        void injectCustomModelsSection();
+        // If already added, no need for observer
+        if (document.getElementById('agy-custom-models-section'))
+            return;
+        // Set up observer: watch all changes under document.body
+        injectionObserver = new MutationObserver(() => {
+            // Debounce: coalesce consecutive mutations into a single attempt
+            if (injectionDebounceTimer)
+                clearTimeout(injectionDebounceTimer);
+            injectionDebounceTimer = setTimeout(async () => {
+                await injectCustomModelsSection();
+                // If successfully injected, stop observing
+                if (document.getElementById('agy-custom-models-section')) {
+                    if (injectionObserver) {
+                        injectionObserver.disconnect();
+                        injectionObserver = null;
+                    }
+                }
+            }, 200);
+        });
+        injectionObserver.observe(document.body, {
+            childList: true,
+            subtree: true,
+        });
     }
-    let container = document.getElementById('agy-toast-container');
-    if (!container) {
-        container = document.createElement('div');
-        container.id = 'agy-toast-container';
-        container.style.cssText = `
+    // URL tracking for re-injection on SPA page transitions
+    let lastUrl = location.href;
+    setInterval(() => {
+        const currentUrl = location.href;
+        if (currentUrl !== lastUrl) {
+            lastUrl = currentUrl;
+            // Page changed — clean up previous observer and re-initialize
+            if (injectionObserver) {
+                injectionObserver.disconnect();
+                injectionObserver = null;
+            }
+            // Re-initialize after a short delay (for new DOM to render)
+            setTimeout(setupInjectionObserver, 500);
+        }
+    }, 1500);
+    // --- Contextual Error Toast UI ----------------------------------------
+    function showErrorToast(diagnostic) {
+        if (!document || !document.body)
+            return;
+        const existingToastId = `agy-toast-${diagnostic.errorType}`;
+        const existing = document.getElementById(existingToastId);
+        if (existing) {
+            existing.style.animation = 'none';
+            void existing.offsetWidth; // trigger reflow
+            existing.style.animation = 'agy-toast-shake 0.4s ease-in-out, agy-toast-fade-in 0.3s ease-out';
+            return;
+        }
+        let container = document.getElementById('agy-toast-container');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'agy-toast-container';
+            container.style.cssText = `
         position: fixed;
         top: 24px;
         right: 24px;
@@ -759,9 +789,9 @@ function showErrorToast(diagnostic) {
         width: calc(100vw - 48px);
         pointer-events: none;
       `;
-        document.body.appendChild(container);
-        const style = document.createElement('style');
-        style.textContent = `
+            document.body.appendChild(container);
+            const style = document.createElement('style');
+            style.textContent = `
         @keyframes agy-toast-fade-in {
           from { opacity: 0; transform: translateY(-20px) scale(0.95); }
           to { opacity: 1; transform: translateY(0) scale(1); }
@@ -779,12 +809,12 @@ function showErrorToast(diagnostic) {
           .agy-toast-el { animation: none !important; }
         }
       `;
-        document.head.appendChild(style);
-    }
-    const toast = document.createElement('div');
-    toast.id = existingToastId;
-    toast.className = 'agy-toast-el';
-    toast.style.cssText = `
+            document.head.appendChild(style);
+        }
+        const toast = document.createElement('div');
+        toast.id = existingToastId;
+        toast.className = 'agy-toast-el';
+        toast.style.cssText = `
       background-color: #18181b;
       border: 1px solid #27272a;
       border-radius: 12px;
@@ -800,34 +830,34 @@ function showErrorToast(diagnostic) {
       flex-direction: column;
       gap: 10px;
     `;
-    let borderLeftColor = '#a855f7';
-    let iconHtml = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>`;
-    if (diagnostic.errorType === 'billing') {
-        borderLeftColor = '#ef4444';
-        iconHtml = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>`;
-    }
-    else if (diagnostic.errorType === 'auth' || diagnostic.errorType === 'forbidden') {
-        borderLeftColor = '#f97316';
-        iconHtml = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`;
-    }
-    else if (diagnostic.errorType === 'rate_limit') {
-        borderLeftColor = '#eab308';
-        iconHtml = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
-    }
-    else if (diagnostic.errorType === 'timeout') {
-        borderLeftColor = '#3b82f6';
-        iconHtml = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
-    }
-    else if (diagnostic.errorType === 'network' || diagnostic.errorType === 'dns') {
-        borderLeftColor = '#64748b';
-        iconHtml = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.59 16a7.5 7.5 0 0 1 6.82 0M12 20h.01"/></svg>`;
-    }
-    else if (diagnostic.errorType === 'server') {
-        borderLeftColor = '#ef4444';
-        iconHtml = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
-    }
-    const accentLine = document.createElement('div');
-    accentLine.style.cssText = `
+        let borderLeftColor = '#a855f7';
+        let iconHtml = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>`;
+        if (diagnostic.errorType === 'billing') {
+            borderLeftColor = '#ef4444';
+            iconHtml = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>`;
+        }
+        else if (diagnostic.errorType === 'auth' || diagnostic.errorType === 'forbidden') {
+            borderLeftColor = '#f97316';
+            iconHtml = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`;
+        }
+        else if (diagnostic.errorType === 'rate_limit') {
+            borderLeftColor = '#eab308';
+            iconHtml = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
+        }
+        else if (diagnostic.errorType === 'timeout') {
+            borderLeftColor = '#3b82f6';
+            iconHtml = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
+        }
+        else if (diagnostic.errorType === 'network' || diagnostic.errorType === 'dns') {
+            borderLeftColor = '#64748b';
+            iconHtml = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.59 16a7.5 7.5 0 0 1 6.82 0M12 20h.01"/></svg>`;
+        }
+        else if (diagnostic.errorType === 'server') {
+            borderLeftColor = '#ef4444';
+            iconHtml = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
+        }
+        const accentLine = document.createElement('div');
+        accentLine.style.cssText = `
       position: absolute;
       left: 0;
       top: 0;
@@ -835,50 +865,50 @@ function showErrorToast(diagnostic) {
       width: 4px;
       background-color: ${borderLeftColor};
     `;
-    toast.appendChild(accentLine);
-    const mainRow = document.createElement('div');
-    mainRow.style.cssText = `
+        toast.appendChild(accentLine);
+        const mainRow = document.createElement('div');
+        mainRow.style.cssText = `
       display: flex;
       gap: 12px;
       align-items: flex-start;
     `;
-    const iconContainer = document.createElement('div');
-    iconContainer.style.cssText = `
+        const iconContainer = document.createElement('div');
+        iconContainer.style.cssText = `
       color: ${borderLeftColor};
       display: flex;
       align-items: center;
       justify-content: center;
       margin-top: 2px;
     `;
-    iconContainer.innerHTML = iconHtml;
-    mainRow.appendChild(iconContainer);
-    const textContainer = document.createElement('div');
-    textContainer.style.cssText = `
+        iconContainer.innerHTML = iconHtml;
+        mainRow.appendChild(iconContainer);
+        const textContainer = document.createElement('div');
+        textContainer.style.cssText = `
       display: flex;
       flex-direction: column;
       gap: 4px;
       flex: 1;
     `;
-    const title = document.createElement('div');
-    title.style.cssText = `
+        const title = document.createElement('div');
+        title.style.cssText = `
       font-size: 14px;
       font-weight: 600;
       color: #f4f4f5;
     `;
-    title.textContent = diagnostic.title;
-    textContainer.appendChild(title);
-    const desc = document.createElement('div');
-    desc.style.cssText = `
+        title.textContent = diagnostic.title;
+        textContainer.appendChild(title);
+        const desc = document.createElement('div');
+        desc.style.cssText = `
       font-size: 12px;
       color: #a1a1aa;
       line-height: 1.4;
     `;
-    desc.textContent = diagnostic.message;
-    textContainer.appendChild(desc);
-    mainRow.appendChild(textContainer);
-    const closeBtn = document.createElement('button');
-    closeBtn.textContent = '×';
-    closeBtn.style.cssText = `
+        desc.textContent = diagnostic.message;
+        textContainer.appendChild(desc);
+        mainRow.appendChild(textContainer);
+        const closeBtn = document.createElement('button');
+        closeBtn.textContent = '×';
+        closeBtn.style.cssText = `
       background: transparent;
       border: none;
       color: #71717a;
@@ -889,22 +919,22 @@ function showErrorToast(diagnostic) {
       margin-top: -2px;
       transition: color 0.15s ease;
     `;
-    closeBtn.addEventListener('mouseenter', () => closeBtn.style.color = '#f4f4f5');
-    closeBtn.addEventListener('mouseleave', () => closeBtn.style.color = '#71717a');
-    let autoDismissTimer = null;
-    const dismissToast = () => {
-        if (autoDismissTimer) {
-            clearTimeout(autoDismissTimer);
-        }
-        toast.style.animation = 'agy-toast-fade-out 0.25s ease-in forwards';
-        setTimeout(() => toast.remove(), 250);
-    };
-    closeBtn.addEventListener('click', dismissToast);
-    mainRow.appendChild(closeBtn);
-    toast.appendChild(mainRow);
-    if (diagnostic.suggestions && diagnostic.suggestions.length > 0) {
-        const suggBox = document.createElement('div');
-        suggBox.style.cssText = `
+        closeBtn.addEventListener('mouseenter', () => closeBtn.style.color = '#f4f4f5');
+        closeBtn.addEventListener('mouseleave', () => closeBtn.style.color = '#71717a');
+        let autoDismissTimer = null;
+        const dismissToast = () => {
+            if (autoDismissTimer) {
+                clearTimeout(autoDismissTimer);
+            }
+            toast.style.animation = 'agy-toast-fade-out 0.25s ease-in forwards';
+            setTimeout(() => toast.remove(), 250);
+        };
+        closeBtn.addEventListener('click', dismissToast);
+        mainRow.appendChild(closeBtn);
+        toast.appendChild(mainRow);
+        if (diagnostic.suggestions && diagnostic.suggestions.length > 0) {
+            const suggBox = document.createElement('div');
+            suggBox.style.cssText = `
         background-color: #1c1c1f;
         border-radius: 6px;
         padding: 10px 12px;
@@ -913,18 +943,18 @@ function showErrorToast(diagnostic) {
         gap: 6px;
         margin-left: 30px;
       `;
-        const suggTitle = document.createElement('div');
-        suggTitle.style.cssText = `
+            const suggTitle = document.createElement('div');
+            suggTitle.style.cssText = `
         font-size: 10px;
         font-weight: 600;
         color: #71717a;
         text-transform: uppercase;
         letter-spacing: 0.5px;
       `;
-        suggTitle.textContent = 'Suggested Actions';
-        suggBox.appendChild(suggTitle);
-        const suggList = document.createElement('ul');
-        suggList.style.cssText = `
+            suggTitle.textContent = 'Suggested Actions';
+            suggBox.appendChild(suggTitle);
+            const suggList = document.createElement('ul');
+            suggList.style.cssText = `
         margin: 0;
         padding-left: 16px;
         font-size: 11px;
@@ -933,26 +963,26 @@ function showErrorToast(diagnostic) {
         flex-direction: column;
         gap: 4px;
       `;
-        diagnostic.suggestions.forEach((sug) => {
-            const item = document.createElement('li');
-            item.textContent = sug;
-            suggList.appendChild(item);
-        });
-        suggBox.appendChild(suggList);
-        toast.appendChild(suggBox);
-    }
-    const actionsRow = document.createElement('div');
-    actionsRow.style.cssText = `
+            diagnostic.suggestions.forEach((sug) => {
+                const item = document.createElement('li');
+                item.textContent = sug;
+                suggList.appendChild(item);
+            });
+            suggBox.appendChild(suggList);
+            toast.appendChild(suggBox);
+        }
+        const actionsRow = document.createElement('div');
+        actionsRow.style.cssText = `
       display: flex;
       justify-content: flex-end;
       gap: 8px;
       margin-top: 4px;
       margin-left: 30px;
     `;
-    if (diagnostic.errorType === 'auth') {
-        const configBtn = document.createElement('button');
-        configBtn.textContent = 'Configure API Key';
-        configBtn.style.cssText = `
+        if (diagnostic.errorType === 'auth') {
+            const configBtn = document.createElement('button');
+            configBtn.textContent = 'Configure API Key';
+            configBtn.style.cssText = `
         background-color: #3b82f6;
         border: none;
         color: white;
@@ -963,18 +993,18 @@ function showErrorToast(diagnostic) {
         cursor: pointer;
         transition: background-color 0.15s ease;
       `;
-        configBtn.addEventListener('mouseenter', () => configBtn.style.backgroundColor = '#2563eb');
-        configBtn.addEventListener('mouseleave', () => configBtn.style.backgroundColor = '#3b82f6');
-        configBtn.addEventListener('click', () => {
-            openProviderManagerModal();
-            dismissToast();
-        });
-        actionsRow.appendChild(configBtn);
-    }
-    if (diagnostic.actionUrl) {
-        const billingBtn = document.createElement('button');
-        billingBtn.textContent = 'Manage Billing';
-        billingBtn.style.cssText = `
+            configBtn.addEventListener('mouseenter', () => configBtn.style.backgroundColor = '#2563eb');
+            configBtn.addEventListener('mouseleave', () => configBtn.style.backgroundColor = '#3b82f6');
+            configBtn.addEventListener('click', () => {
+                openProviderManagerModal();
+                dismissToast();
+            });
+            actionsRow.appendChild(configBtn);
+        }
+        if (diagnostic.actionUrl) {
+            const billingBtn = document.createElement('button');
+            billingBtn.textContent = 'Manage Billing';
+            billingBtn.style.cssText = `
         background-color: #ef4444;
         border: none;
         color: white;
@@ -985,19 +1015,19 @@ function showErrorToast(diagnostic) {
         cursor: pointer;
         transition: background-color 0.15s ease;
       `;
-        billingBtn.addEventListener('mouseenter', () => billingBtn.style.backgroundColor = '#dc2626');
-        billingBtn.addEventListener('mouseleave', () => billingBtn.style.backgroundColor = '#ef4444');
-        billingBtn.addEventListener('click', () => {
-            window.open(diagnostic.actionUrl, '_blank');
-            dismissToast();
-        });
-        actionsRow.appendChild(billingBtn);
-    }
-    const refreshBtn = findRefreshButton();
-    if (refreshBtn && (diagnostic.errorType === 'rate_limit' || diagnostic.errorType === 'server' || diagnostic.errorType === 'network')) {
-        const retryBtn = document.createElement('button');
-        retryBtn.textContent = 'Retry Request';
-        retryBtn.style.cssText = `
+            billingBtn.addEventListener('mouseenter', () => billingBtn.style.backgroundColor = '#dc2626');
+            billingBtn.addEventListener('mouseleave', () => billingBtn.style.backgroundColor = '#ef4444');
+            billingBtn.addEventListener('click', () => {
+                window.open(diagnostic.actionUrl, '_blank');
+                dismissToast();
+            });
+            actionsRow.appendChild(billingBtn);
+        }
+        const refreshBtn = findRefreshButton();
+        if (refreshBtn && (diagnostic.errorType === 'rate_limit' || diagnostic.errorType === 'server' || diagnostic.errorType === 'network')) {
+            const retryBtn = document.createElement('button');
+            retryBtn.textContent = 'Retry Request';
+            retryBtn.style.cssText = `
         background-color: #27272a;
         border: 1px solid #3f3f46;
         color: #d4d4d8;
@@ -1008,152 +1038,152 @@ function showErrorToast(diagnostic) {
         cursor: pointer;
         transition: all 0.15s ease;
       `;
-        retryBtn.addEventListener('mouseenter', () => {
-            retryBtn.style.backgroundColor = '#3f3f46';
-            retryBtn.style.borderColor = '#52525b';
-        });
-        retryBtn.addEventListener('mouseleave', () => {
-            retryBtn.style.backgroundColor = '#27272a';
-            retryBtn.style.borderColor = '#3f3f46';
-        });
-        retryBtn.addEventListener('click', () => {
-            refreshBtn.click();
-            dismissToast();
-        });
-        actionsRow.appendChild(retryBtn);
+            retryBtn.addEventListener('mouseenter', () => {
+                retryBtn.style.backgroundColor = '#3f3f46';
+                retryBtn.style.borderColor = '#52525b';
+            });
+            retryBtn.addEventListener('mouseleave', () => {
+                retryBtn.style.backgroundColor = '#27272a';
+                retryBtn.style.borderColor = '#3f3f46';
+            });
+            retryBtn.addEventListener('click', () => {
+                refreshBtn.click();
+                dismissToast();
+            });
+            actionsRow.appendChild(retryBtn);
+        }
+        if (actionsRow.children.length > 0) {
+            toast.appendChild(actionsRow);
+        }
+        container.appendChild(toast);
+        if (diagnostic.errorType !== 'auth' && diagnostic.errorType !== 'billing') {
+            autoDismissTimer = setTimeout(dismissToast, 10000);
+        }
     }
-    if (actionsRow.children.length > 0) {
-        toast.appendChild(actionsRow);
-    }
-    container.appendChild(toast);
-    if (diagnostic.errorType !== 'auth' && diagnostic.errorType !== 'billing') {
-        autoDismissTimer = setTimeout(dismissToast, 10000);
-    }
-}
-// --- Network Interceptor for Model Injection & Diagnostics -----------
-const customModelsCache = { models: [], ts: 0 };
-async function getCustomModelsForInjection() {
-    if (Date.now() - customModelsCache.ts < 30000)
-        return customModelsCache.models;
-    try {
-        const providers = await storageAPI.getProviders();
-        const injectedModels = [];
-        providers.forEach(p => {
-            if (!p.enabled)
-                return;
-            p.models.forEach((m) => {
-                if (!m.enabled)
+    // --- Network Interceptor for Model Injection & Diagnostics -----------
+    const customModelsCache = { models: [], ts: 0 };
+    async function getCustomModelsForInjection() {
+        if (Date.now() - customModelsCache.ts < 30000)
+            return customModelsCache.models;
+        try {
+            const providers = await storageAPI.getProviders();
+            const injectedModels = [];
+            providers.forEach(p => {
+                if (!p.enabled)
                     return;
-                injectedModels.push({
-                    name: m.id,
-                    displayName: m.displayName || m.id,
-                    provider: p.provider,
-                    apiKey: p.apiKey,
-                    apiUrl: p.apiUrl,
-                    externalModelName: m.id,
-                    allowUnauthorized: p.allowUnauthorized,
-                    inputModalities: ['text']
+                p.models.forEach((m) => {
+                    if (!m.enabled)
+                        return;
+                    injectedModels.push({
+                        name: m.id,
+                        displayName: m.displayName || m.id,
+                        provider: p.provider,
+                        apiKey: p.apiKey,
+                        apiUrl: p.apiUrl,
+                        externalModelName: m.id,
+                        allowUnauthorized: p.allowUnauthorized,
+                        inputModalities: ['text']
+                    });
                 });
             });
-        });
-        customModelsCache.models = injectedModels;
-        customModelsCache.ts = Date.now();
-    }
-    catch { /* ignore */ }
-    return customModelsCache.models;
-}
-const modelHealthState = new Map();
-const failedModelDisplayNames = new Set();
-let dropdownTimeout;
-const dropdownObserver = new MutationObserver((mutations) => {
-    if (failedModelDisplayNames.size === 0)
-        return;
-    let hasNewNodes = false;
-    for (const m of mutations) {
-        if (m.addedNodes.length > 0) {
-            hasNewNodes = true;
-            break;
+            customModelsCache.models = injectedModels;
+            customModelsCache.ts = Date.now();
         }
+        catch { /* ignore */ }
+        return customModelsCache.models;
     }
-    if (!hasNewNodes)
-        return;
-    if (dropdownTimeout)
-        clearTimeout(dropdownTimeout);
-    dropdownTimeout = setTimeout(() => {
-        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
-        let node;
-        while ((node = walker.nextNode())) {
-            const text = node.nodeValue?.trim();
-            if (text && failedModelDisplayNames.has(text)) {
-                const parent = node.parentNode;
-                if (parent && !parent.querySelector('.ag-model-warning')) {
-                    // Find error msg
-                    let errMsg = "Provider Error. Click to resolve.";
-                    for (const health of Array.from(modelHealthState.values())) {
-                        if (health.status === 'error' && health.diagnostic) {
-                            errMsg = health.diagnostic.errorType.toUpperCase() + ": " + health.diagnostic.message;
-                            break;
-                        }
-                    }
-                    const warning = document.createElement('span');
-                    warning.className = 'ag-model-warning';
-                    warning.style.cssText = 'cursor: pointer; margin-left: 6px; display: inline-flex; align-items: center; justify-content: center;';
-                    warning.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
-                    warning.title = errMsg + " (Click to fix)";
-                    warning.onclick = (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        openProviderManagerModal();
-                    };
-                    parent.appendChild(warning);
-                }
-            }
-        }
-    }, 150); // Debounce to prevent blocking the main thread
-});
-if (document && document.body) {
-    dropdownObserver.observe(document.body, { childList: true, subtree: true });
-}
-else {
-    document.addEventListener('DOMContentLoaded', () => {
-        dropdownObserver.observe(document.body, { childList: true, subtree: true });
-    });
-}
-function showPersistentBanner(diagnostic) {
-    if (!document || !document.body)
-        return;
-    const existing = document.getElementById('agy-persistent-banner');
-    if (existing) {
-        existing.style.animation = 'none';
-        void existing.offsetWidth;
-        existing.style.animation = 'agy-toast-shake 0.4s ease-in-out';
-        return;
-    }
-    const textareas = document.querySelectorAll('textarea');
-    let chatInput = null;
-    for (const ta of Array.from(textareas)) {
-        if (ta.getBoundingClientRect().height > 10) {
-            chatInput = ta;
-            if (ta.placeholder && (ta.placeholder.includes('Ask') || ta.placeholder.includes('Type'))) {
+    const modelHealthState = new Map();
+    const failedModelDisplayNames = new Set();
+    let dropdownTimeout;
+    const dropdownObserver = new MutationObserver((mutations) => {
+        if (failedModelDisplayNames.size === 0)
+            return;
+        let hasNewNodes = false;
+        for (const m of mutations) {
+            if (m.addedNodes.length > 0) {
+                hasNewNodes = true;
                 break;
             }
         }
+        if (!hasNewNodes)
+            return;
+        if (dropdownTimeout)
+            clearTimeout(dropdownTimeout);
+        dropdownTimeout = setTimeout(() => {
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+            let node;
+            while ((node = walker.nextNode())) {
+                const text = node.nodeValue?.trim();
+                if (text && failedModelDisplayNames.has(text)) {
+                    const parent = node.parentNode;
+                    if (parent && !parent.querySelector('.ag-model-warning')) {
+                        // Find error msg
+                        let errMsg = "Provider Error. Click to resolve.";
+                        for (const health of Array.from(modelHealthState.values())) {
+                            if (health.status === 'error' && health.diagnostic) {
+                                errMsg = health.diagnostic.errorType.toUpperCase() + ": " + health.diagnostic.message;
+                                break;
+                            }
+                        }
+                        const warning = document.createElement('span');
+                        warning.className = 'ag-model-warning';
+                        warning.style.cssText = 'cursor: pointer; margin-left: 6px; display: inline-flex; align-items: center; justify-content: center;';
+                        warning.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
+                        warning.title = errMsg + " (Click to fix)";
+                        warning.onclick = (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            openProviderManagerModal();
+                        };
+                        parent.appendChild(warning);
+                    }
+                }
+            }
+        }, 150); // Debounce to prevent blocking the main thread
+    });
+    if (document && document.body) {
+        dropdownObserver.observe(document.body, { childList: true, subtree: true });
     }
-    if (!chatInput) {
-        showErrorToast(diagnostic); // fallback
-        return;
+    else {
+        document.addEventListener('DOMContentLoaded', () => {
+            dropdownObserver.observe(document.body, { childList: true, subtree: true });
+        });
     }
-    let container = chatInput.parentElement;
-    while (container && container.tagName !== 'BODY') {
-        if (window.getComputedStyle(container).position === 'relative')
-            break;
-        container = container.parentElement;
-    }
-    if (!container || container.tagName === 'BODY')
-        container = chatInput.parentElement;
-    const banner = document.createElement('div');
-    banner.id = 'agy-persistent-banner';
-    banner.style.cssText = `
+    function showPersistentBanner(diagnostic) {
+        if (!document || !document.body)
+            return;
+        const existing = document.getElementById('agy-persistent-banner');
+        if (existing) {
+            existing.style.animation = 'none';
+            void existing.offsetWidth;
+            existing.style.animation = 'agy-toast-shake 0.4s ease-in-out';
+            return;
+        }
+        const textareas = document.querySelectorAll('textarea');
+        let chatInput = null;
+        for (const ta of Array.from(textareas)) {
+            if (ta.getBoundingClientRect().height > 10) {
+                chatInput = ta;
+                if (ta.placeholder && (ta.placeholder.includes('Ask') || ta.placeholder.includes('Type'))) {
+                    break;
+                }
+            }
+        }
+        if (!chatInput) {
+            showErrorToast(diagnostic); // fallback
+            return;
+        }
+        let container = chatInput.parentElement;
+        while (container && container.tagName !== 'BODY') {
+            if (window.getComputedStyle(container).position === 'relative')
+                break;
+            container = container.parentElement;
+        }
+        if (!container || container.tagName === 'BODY')
+            container = chatInput.parentElement;
+        const banner = document.createElement('div');
+        banner.id = 'agy-persistent-banner';
+        banner.style.cssText = `
       background-color: #1a1a1a;
       border: 1px solid #333;
       border-radius: 8px;
@@ -1168,105 +1198,176 @@ function showPersistentBanner(diagnostic) {
       position: relative;
       z-index: 100;
     `;
-    const headerRow = document.createElement('div');
-    headerRow.style.cssText = `display: flex; align-items: center; gap: 8px;`;
-    const icon = document.createElement('div');
-    icon.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
-    const title = document.createElement('div');
-    title.style.cssText = `font-weight: 600; font-size: 13px;`;
-    title.textContent = diagnostic.title || 'Model quota reached';
-    headerRow.appendChild(icon);
-    headerRow.appendChild(title);
-    banner.appendChild(headerRow);
-    const desc = document.createElement('div');
-    desc.style.cssText = `font-size: 12px; color: #a3a3a3; line-height: 1.4;`;
-    desc.textContent = diagnostic.message + ' To continue using this model now, check your provider billing or API key.';
-    banner.appendChild(desc);
-    const actionsRow = document.createElement('div');
-    actionsRow.style.cssText = `display: flex; justify-content: flex-end; gap: 8px; align-items: center;`;
-    const dismissBtn = document.createElement('button');
-    dismissBtn.textContent = 'Dismiss';
-    dismissBtn.style.cssText = `
+        const headerRow = document.createElement('div');
+        headerRow.style.cssText = `display: flex; align-items: center; gap: 8px;`;
+        const icon = document.createElement('div');
+        icon.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+        const title = document.createElement('div');
+        title.style.cssText = `font-weight: 600; font-size: 13px;`;
+        title.textContent = diagnostic.title || 'Model quota reached';
+        headerRow.appendChild(icon);
+        headerRow.appendChild(title);
+        banner.appendChild(headerRow);
+        const desc = document.createElement('div');
+        desc.style.cssText = `font-size: 12px; color: #a3a3a3; line-height: 1.4;`;
+        desc.textContent = diagnostic.message + ' To continue using this model now, check your provider billing or API key.';
+        banner.appendChild(desc);
+        const actionsRow = document.createElement('div');
+        actionsRow.style.cssText = `display: flex; justify-content: flex-end; gap: 8px; align-items: center;`;
+        const dismissBtn = document.createElement('button');
+        dismissBtn.textContent = 'Dismiss';
+        dismissBtn.style.cssText = `
       background-color: #333; border: none; color: #e5e5e5; font-size: 12px; padding: 6px 12px; border-radius: 4px; cursor: pointer;
     `;
-    dismissBtn.addEventListener('mouseenter', () => dismissBtn.style.backgroundColor = '#404040');
-    dismissBtn.addEventListener('mouseleave', () => dismissBtn.style.backgroundColor = '#333');
-    dismissBtn.onclick = () => banner.remove();
-    actionsRow.appendChild(dismissBtn);
-    if (diagnostic.actionUrl) {
-        const actionBtn = document.createElement('button');
-        actionBtn.textContent = diagnostic.errorType === 'auth' ? 'Configure API Key' : 'Manage Billing';
-        actionBtn.style.cssText = `
+        dismissBtn.addEventListener('mouseenter', () => dismissBtn.style.backgroundColor = '#404040');
+        dismissBtn.addEventListener('mouseleave', () => dismissBtn.style.backgroundColor = '#333');
+        dismissBtn.onclick = () => banner.remove();
+        actionsRow.appendChild(dismissBtn);
+        if (diagnostic.actionUrl) {
+            const actionBtn = document.createElement('button');
+            actionBtn.textContent = diagnostic.errorType === 'auth' ? 'Configure API Key' : 'Manage Billing';
+            actionBtn.style.cssText = `
         background-color: #0284c7; border: none; color: white; font-size: 12px; padding: 6px 12px; border-radius: 4px; cursor: pointer;
       `;
-        actionBtn.addEventListener('mouseenter', () => actionBtn.style.backgroundColor = '#0369a1');
-        actionBtn.addEventListener('mouseleave', () => actionBtn.style.backgroundColor = '#0284c7');
-        actionBtn.onclick = () => {
-            if (diagnostic.errorType === 'auth') {
-                openProviderManagerModal();
-            }
-            else {
-                window.open(diagnostic.actionUrl, '_blank');
-            }
-            banner.remove();
-        };
-        actionsRow.appendChild(actionBtn);
-    }
-    else if (diagnostic.errorType === 'auth') {
-        const actionBtn = document.createElement('button');
-        actionBtn.textContent = 'Configure API Key';
-        actionBtn.style.cssText = `
-        background-color: #0284c7; border: none; color: white; font-size: 12px; padding: 6px 12px; border-radius: 4px; cursor: pointer;
-      `;
-        actionBtn.addEventListener('mouseenter', () => actionBtn.style.backgroundColor = '#0369a1');
-        actionBtn.addEventListener('mouseleave', () => actionBtn.style.backgroundColor = '#0284c7');
-        actionBtn.onclick = () => { openProviderManagerModal(); banner.remove(); };
-        actionsRow.appendChild(actionBtn);
-    }
-    banner.appendChild(actionsRow);
-    if (container && container.parentElement) {
-        container.parentElement.insertBefore(banner, container);
-    }
-}
-async function handleModelError(url, diagnostic) {
-    const match = url.match(/models\/(MODEL_PLACEHOLDER_M[^:]+)/);
-    const modelId = match ? match[1] : null;
-    if (diagnostic.errorType === 'billing' || diagnostic.errorType === 'auth' || diagnostic.errorType === 'forbidden') {
-        if (modelId) {
-            const models = await getCustomModelsForInjection();
-            const m = models.find(x => `MODEL_PLACEHOLDER_M${(0, idGenerator_1.generateModelPlaceholderId)(x)}` === modelId);
-            if (m) {
-                failedModelDisplayNames.add(m.displayName || m.name);
-                modelHealthState.set((0, idGenerator_1.generateModelPlaceholderId)(m), { status: 'error', lastChecked: Date.now(), diagnostic });
-            }
+            actionBtn.addEventListener('mouseenter', () => actionBtn.style.backgroundColor = '#0369a1');
+            actionBtn.addEventListener('mouseleave', () => actionBtn.style.backgroundColor = '#0284c7');
+            actionBtn.onclick = () => {
+                if (diagnostic.errorType === 'auth') {
+                    openProviderManagerModal();
+                }
+                else {
+                    window.open(diagnostic.actionUrl, '_blank');
+                }
+                banner.remove();
+            };
+            actionsRow.appendChild(actionBtn);
         }
-        showPersistentBanner(diagnostic);
+        else if (diagnostic.errorType === 'auth') {
+            const actionBtn = document.createElement('button');
+            actionBtn.textContent = 'Configure API Key';
+            actionBtn.style.cssText = `
+        background-color: #0284c7; border: none; color: white; font-size: 12px; padding: 6px 12px; border-radius: 4px; cursor: pointer;
+      `;
+            actionBtn.addEventListener('mouseenter', () => actionBtn.style.backgroundColor = '#0369a1');
+            actionBtn.addEventListener('mouseleave', () => actionBtn.style.backgroundColor = '#0284c7');
+            actionBtn.onclick = () => { openProviderManagerModal(); banner.remove(); };
+            actionsRow.appendChild(actionBtn);
+        }
+        banner.appendChild(actionsRow);
+        if (container && container.parentElement) {
+            container.parentElement.insertBefore(banner, container);
+        }
     }
-    else {
-        showErrorToast(diagnostic);
+    async function handleModelError(url, diagnostic) {
+        const match = url.match(/models\/(MODEL_PLACEHOLDER_M[^:]+)/);
+        const modelId = match ? match[1] : null;
+        if (diagnostic.errorType === 'billing' || diagnostic.errorType === 'auth' || diagnostic.errorType === 'forbidden') {
+            if (modelId) {
+                const models = await getCustomModelsForInjection();
+                const m = models.find(x => `MODEL_PLACEHOLDER_M${(0, idGenerator_1.generateModelPlaceholderId)(x)}` === modelId);
+                if (m) {
+                    failedModelDisplayNames.add(m.displayName || m.name);
+                    modelHealthState.set((0, idGenerator_1.generateModelPlaceholderId)(m), { status: 'error', lastChecked: Date.now(), diagnostic });
+                }
+            }
+            showPersistentBanner(diagnostic);
+        }
+        else {
+            showErrorToast(diagnostic);
+        }
     }
-}
-// Intercept XHR to inject custom models and capture errors
-const origXHROpen = XMLHttpRequest.prototype.open;
-XMLHttpRequest.prototype.open = function (method, url, async, username, password) {
-    this._agy_url = typeof url === 'string' ? url : url.toString();
-    this._agy_method = method;
-    return origXHROpen.call(this, method, url, async, username, password);
-};
-const origXHRSend = XMLHttpRequest.prototype.send;
-XMLHttpRequest.prototype.send = function (body) {
-    const xhr = this;
-    const url = xhr._agy_url || '';
-    if (url.includes('GetAvailableModels') || url.includes('fetchAvailableModels')) {
-        const origOnReady = xhr.onreadystatechange;
-        xhr.onreadystatechange = async function (ev) {
-            if (xhr.readyState === 4 && xhr.status === 200) {
+    // Intercept XHR to inject custom models and capture errors
+    const origXHROpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url, async, username, password) {
+        this._agy_url = typeof url === 'string' ? url : url.toString();
+        this._agy_method = method;
+        return origXHROpen.call(this, method, url, async, username, password);
+    };
+    const origXHRSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function (body) {
+        const xhr = this;
+        const url = xhr._agy_url || '';
+        if (url.includes('GetAvailableModels') || url.includes('fetchAvailableModels')) {
+            const origOnReady = xhr.onreadystatechange;
+            xhr.onreadystatechange = async function (ev) {
+                if (xhr.readyState === 4 && xhr.status === 200) {
+                    const customModels = await getCustomModelsForInjection();
+                    if (customModels && customModels.length > 0) {
+                        try {
+                            const responseText = xhr.responseText;
+                            if (responseText && responseText.length > 10) {
+                                const parsed = JSON.parse(responseText);
+                                const modelsObj = (parsed.models || parsed.availableModels || parsed.available_models || {});
+                                for (const m of customModels) {
+                                    const slug = (0, idGenerator_1.toSlug)(m);
+                                    const placeholderId = (0, idGenerator_1.generateModelPlaceholderId)(m);
+                                    modelsObj[slug] = {
+                                        displayName: m.displayName || m.name,
+                                        recommended: true,
+                                        maxTokens: 1048576,
+                                        maxOutputTokens: 4096,
+                                        tokenizerType: 'LLAMA_WITH_SPECIAL',
+                                        model: `MODEL_PLACEHOLDER_M${placeholderId}`,
+                                        apiProvider: 'API_PROVIDER_GOOGLE_GEMINI',
+                                        modelProvider: 'MODEL_PROVIDER_GOOGLE',
+                                    };
+                                }
+                                // Override response
+                                Object.defineProperty(xhr, 'responseText', { value: JSON.stringify(parsed), writable: true });
+                                Object.defineProperty(xhr, 'response', { value: JSON.stringify(parsed), writable: true });
+                            }
+                        }
+                        catch { /* ignore parse errors */ }
+                    }
+                }
+                if (origOnReady)
+                    origOnReady.call(xhr, ev);
+            };
+        }
+        else if (url.includes('generateContent') || url.includes('streamGenerateContent')) {
+            const origOnReady = xhr.onreadystatechange;
+            xhr.onreadystatechange = async function (ev) {
+                if (xhr.readyState === 4) {
+                    const errorTypeHeader = xhr.getResponseHeader('X-AG-Error-Type');
+                    if (xhr.status >= 400 || errorTypeHeader) {
+                        try {
+                            const parsed = JSON.parse(xhr.responseText);
+                            const diagnostic = parsed._agDiagnostic || (0, errorClassifier_1.classifyError)(xhr.status, null, xhr.responseText);
+                            handleModelError(url, diagnostic);
+                        }
+                        catch {
+                            const diagnostic = (0, errorClassifier_1.classifyError)(xhr.status, null, xhr.responseText);
+                            handleModelError(url, diagnostic);
+                        }
+                    }
+                }
+                if (origOnReady)
+                    origOnReady.call(xhr, ev);
+            };
+            const origOnError = xhr.onerror;
+            xhr.onerror = function (ev) {
+                const diagnostic = (0, errorClassifier_1.classifyError)(undefined, 'Network Error');
+                handleModelError(url, diagnostic);
+                if (origOnError)
+                    origOnError.call(xhr, ev);
+            };
+        }
+        return origXHRSend.call(xhr, body);
+    };
+    // Intercept fetch responses for model endpoints and error capturing
+    const origFetch = window.fetch;
+    window.fetch = async function (input, init) {
+        const url = typeof input === 'string' ? input : input.url;
+        try {
+            const response = await origFetch.call(window, input, init);
+            if ((url.includes('GetAvailableModels') || url.includes('fetchAvailableModels')) && response.ok) {
                 const customModels = await getCustomModelsForInjection();
                 if (customModels && customModels.length > 0) {
                     try {
-                        const responseText = xhr.responseText;
-                        if (responseText && responseText.length > 10) {
-                            const parsed = JSON.parse(responseText);
+                        const cloned = response.clone();
+                        const text = await cloned.text();
+                        if (text && text.length > 10) {
+                            const parsed = JSON.parse(text);
                             const modelsObj = (parsed.models || parsed.availableModels || parsed.available_models || {});
                             for (const m of customModels) {
                                 const slug = (0, idGenerator_1.toSlug)(m);
@@ -1282,114 +1383,43 @@ XMLHttpRequest.prototype.send = function (body) {
                                     modelProvider: 'MODEL_PROVIDER_GOOGLE',
                                 };
                             }
-                            // Override response
-                            Object.defineProperty(xhr, 'responseText', { value: JSON.stringify(parsed), writable: true });
-                            Object.defineProperty(xhr, 'response', { value: JSON.stringify(parsed), writable: true });
+                            return new Response(JSON.stringify(parsed), {
+                                status: response.status,
+                                statusText: response.statusText,
+                                headers: response.headers,
+                            });
                         }
                     }
                     catch { /* ignore parse errors */ }
                 }
             }
-            if (origOnReady)
-                origOnReady.call(xhr, ev);
-        };
-    }
-    else if (url.includes('generateContent') || url.includes('streamGenerateContent')) {
-        const origOnReady = xhr.onreadystatechange;
-        xhr.onreadystatechange = async function (ev) {
-            if (xhr.readyState === 4) {
-                const errorTypeHeader = xhr.getResponseHeader('X-AG-Error-Type');
-                if (xhr.status >= 400 || errorTypeHeader) {
+            else if (url.includes('generateContent') || url.includes('streamGenerateContent')) {
+                const errorTypeHeader = response.headers.get('X-AG-Error-Type');
+                if (!response.ok || response.status >= 400 || errorTypeHeader) {
                     try {
-                        const parsed = JSON.parse(xhr.responseText);
-                        const diagnostic = parsed._agDiagnostic || (0, errorClassifier_1.classifyError)(xhr.status, null, xhr.responseText);
+                        const cloned = response.clone();
+                        const text = await cloned.text();
+                        const parsed = JSON.parse(text);
+                        const diagnostic = parsed._agDiagnostic || (0, errorClassifier_1.classifyError)(response.status, null, text);
                         handleModelError(url, diagnostic);
                     }
                     catch {
-                        const diagnostic = (0, errorClassifier_1.classifyError)(xhr.status, null, xhr.responseText);
+                        const diagnostic = (0, errorClassifier_1.classifyError)(response.status);
                         handleModelError(url, diagnostic);
                     }
                 }
             }
-            if (origOnReady)
-                origOnReady.call(xhr, ev);
-        };
-        const origOnError = xhr.onerror;
-        xhr.onerror = function (ev) {
-            const diagnostic = (0, errorClassifier_1.classifyError)(undefined, 'Network Error');
-            handleModelError(url, diagnostic);
-            if (origOnError)
-                origOnError.call(xhr, ev);
-        };
-    }
-    return origXHRSend.call(xhr, body);
-};
-// Intercept fetch responses for model endpoints and error capturing
-const origFetch = window.fetch;
-window.fetch = async function (input, init) {
-    const url = typeof input === 'string' ? input : input.url;
-    try {
-        const response = await origFetch.call(window, input, init);
-        if ((url.includes('GetAvailableModels') || url.includes('fetchAvailableModels')) && response.ok) {
-            const customModels = await getCustomModelsForInjection();
-            if (customModels && customModels.length > 0) {
-                try {
-                    const cloned = response.clone();
-                    const text = await cloned.text();
-                    if (text && text.length > 10) {
-                        const parsed = JSON.parse(text);
-                        const modelsObj = (parsed.models || parsed.availableModels || parsed.available_models || {});
-                        for (const m of customModels) {
-                            const slug = (0, idGenerator_1.toSlug)(m);
-                            const placeholderId = (0, idGenerator_1.generateModelPlaceholderId)(m);
-                            modelsObj[slug] = {
-                                displayName: m.displayName || m.name,
-                                recommended: true,
-                                maxTokens: 1048576,
-                                maxOutputTokens: 4096,
-                                tokenizerType: 'LLAMA_WITH_SPECIAL',
-                                model: `MODEL_PLACEHOLDER_M${placeholderId}`,
-                                apiProvider: 'API_PROVIDER_GOOGLE_GEMINI',
-                                modelProvider: 'MODEL_PROVIDER_GOOGLE',
-                            };
-                        }
-                        return new Response(JSON.stringify(parsed), {
-                            status: response.status,
-                            statusText: response.statusText,
-                            headers: response.headers,
-                        });
-                    }
-                }
-                catch { /* ignore parse errors */ }
+            return response;
+        }
+        catch (err) {
+            if (url.includes('generateContent') || url.includes('streamGenerateContent')) {
+                const diagnostic = (0, errorClassifier_1.classifyError)(undefined, err);
+                handleModelError(url, diagnostic);
             }
+            throw err;
         }
-        else if (url.includes('generateContent') || url.includes('streamGenerateContent')) {
-            const errorTypeHeader = response.headers.get('X-AG-Error-Type');
-            if (!response.ok || response.status >= 400 || errorTypeHeader) {
-                try {
-                    const cloned = response.clone();
-                    const text = await cloned.text();
-                    const parsed = JSON.parse(text);
-                    const diagnostic = parsed._agDiagnostic || (0, errorClassifier_1.classifyError)(response.status, null, text);
-                    handleModelError(url, diagnostic);
-                }
-                catch {
-                    const diagnostic = (0, errorClassifier_1.classifyError)(response.status);
-                    handleModelError(url, diagnostic);
-                }
-            }
-        }
-        return response;
-    }
-    catch (err) {
-        if (url.includes('generateContent') || url.includes('streamGenerateContent')) {
-            const diagnostic = (0, errorClassifier_1.classifyError)(undefined, err);
-            handleModelError(url, diagnostic);
-        }
-        throw err;
-    }
-};
-// Start the observer
-setupInjectionObserver();
-;
+    };
+    // Start the observer
+    setupInjectionObserver();
+});
 //# sourceMappingURL=preload.js.map

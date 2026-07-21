@@ -28,21 +28,22 @@ const activeStreams = new Map();
 // F-28 FIX — Single-instance lock: prevents two ag-doctor-ui windows from
 // running simultaneously (which causes CliWorkerPool race conditions).
 // ─────────────────────────────────────────────────────────────────────────────
-const gotLock = electron_1.app.requestSingleInstanceLock();
+// TEMPORARILY DISABLED FOR DEVELOPMENT
+/*
+const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
-    // Another instance is already running — focus it and quit this one.
-    electron_1.app.quit();
+  // Another instance is already running — focus it and quit this one.
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
 }
-else {
-    electron_1.app.on('second-instance', () => {
-        if (mainWindow) {
-            if (mainWindow.isMinimized())
-                mainWindow.restore();
-            mainWindow.show();
-            mainWindow.focus();
-        }
-    });
-}
+*/
 // Disable GPU sandbox in packaged builds to avoid startup crashes on some Windows setups
 electron_1.app.commandLine.appendSwitch('disable-gpu');
 electron_1.app.commandLine.appendSwitch('no-sandbox');
@@ -1056,33 +1057,32 @@ electron_1.ipcMain.handle('ag:stream:cancel', (_evt, streamId) => {
 });
 // ─────────────────────────────────────────────────────────────────────────────
 // F-28: only proceed if we own the single-instance lock
-if (gotLock) {
-    electron_1.app.whenReady().then(() => {
-        createWindow();
-        createTray();
-        // Global shortcuts
-        mainWindow?.webContents.on('before-input-event', (_e, input) => {
-            if (input.control && input.key.toLowerCase() === 'r') {
-                mainWindow?.webContents.send('ag:run-doctor');
-            }
-            else if (input.control && input.key.toLowerCase() === 'l') {
-                mainWindow?.webContents.send('ag:navigate', 'logs');
-            }
-            else if (input.control && input.key.toLowerCase() === 'k') {
-                mainWindow?.webContents.send('ag:command-palette');
-            }
-            else if (input.control && input.key.toLowerCase() === ',') {
-                mainWindow?.webContents.send('ag:navigate', 'settings');
-            }
-        });
-        electron_1.app.on('activate', () => {
-            if (electron_1.BrowserWindow.getAllWindows().length === 0)
-                createWindow();
-            else
-                mainWindow?.show();
-        });
+// DISABLED FOR DEVELOPMENT - app will start without lock check
+electron_1.app.whenReady().then(() => {
+    createWindow();
+    createTray();
+    // Global shortcuts
+    mainWindow?.webContents.on('before-input-event', (_e, input) => {
+        if (input.control && input.key.toLowerCase() === 'r') {
+            mainWindow?.webContents.send('ag:run-doctor');
+        }
+        else if (input.control && input.key.toLowerCase() === 'l') {
+            mainWindow?.webContents.send('ag:navigate', 'logs');
+        }
+        else if (input.control && input.key.toLowerCase() === 'k') {
+            mainWindow?.webContents.send('ag:command-palette');
+        }
+        else if (input.control && input.key.toLowerCase() === ',') {
+            mainWindow?.webContents.send('ag:navigate', 'settings');
+        }
     });
-}
+    electron_1.app.on('activate', () => {
+        if (electron_1.BrowserWindow.getAllWindows().length === 0)
+            createWindow();
+        else
+            mainWindow?.show();
+    });
+});
 electron_1.app.on('window-all-closed', () => {
     for (const proc of activeStreams.values())
         proc.kill();
