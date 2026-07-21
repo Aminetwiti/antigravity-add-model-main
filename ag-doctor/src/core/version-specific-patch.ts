@@ -26,6 +26,13 @@ export interface PatchDefinition {
   patchedUrl: string;
   /** Human-readable description */
   description: string;
+  /** Optional: extra JS-overlay instructions for this version range */
+  extraInstructions?: {
+    scriptName: string;
+    missingJsModules?: string[];
+    overwriteFiles?: string[];
+    newRootFiles?: string[];
+  };
 }
 
 /**

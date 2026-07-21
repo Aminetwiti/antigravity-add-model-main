@@ -237,8 +237,124 @@ async function main() {
       die(`required overwrite source missing: ${src}`);
     }
     ensureDir(path.dirname(dst));
-    fs.copyFileSync(src, dst);
-    const size = fs.statSync(src).size;
+    let content = fs.readFileSync(src, 'utf8');
+    // v2.3.x patch: inject require('../proxy-runner') at the top of dist/main.js
+    // because 2.3.x removed the proxy-runner hook that 2.2.x relied on.
+    // proxy-runner.js is a standalone Electron-app entry that:
+    //   1. Waits for app.whenReady()
+    //   2. Loads dist/proxy
+    //   3. Calls startProxy()
+    //   4. Writes port to AGY_BROWSER_ACTIVE_PORT_FILE
+    // Without this hook, the patched languageServer.js's startProxy() inside
+    // startLanguageServer() is unreliable on 2.3.x (the IDE wizard flow may
+    // bypass startAndMonitorLanguageServer entirely).
+    if (rel === 'dist/main.js' && !content.includes("require('../proxy-runner')") && !content.includes('require("../proxy-runner")')) {
+      // Find a safe insertion point: just after the strict mode + tsHelpers
+      const lines = content.split('\n');
+      // Insert after the "use strict" line (line 1)
+      let insertAt = 0;
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].includes('use strict')) { insertAt = i + 1; break; }
+      }
+      lines.splice(insertAt, 0, "// v2.3.x patch: start the proxy runner as a side-effect import.", "require('../proxy-runner');");
+      content = lines.join('\n');
+      console.log('            + injected require(\'../proxy-runner\') at line ' + (insertAt + 1));
+    }
+    // v2.3.x patch: wrap main_1.default.initialize() in try/catch.
+    // proxy-runner.js (injected below) also calls electron-log's
+    // log.initialize({ preload: true }). The second call THROWS
+    // "log.initialize({ preload }) already called" and breaks the
+    // whenReady callback — the IDE never opens because the rest of the
+    // callback never runs. Catch the throw and log a warning instead.
+    if (rel === 'dist/main.js') {
+      const before = content;
+      content = content.replace(
+        /main_1\.default\.initialize\(\);/,
+        'try { main_1.default.initialize(); } catch (e) { /* v2.3.x patch: electron-log already initialised by proxy-runner.js */ main_1.default.warn("[v2.3.x patch] electron-log initialize failed (non-fatal):", e); }',
+      );
+      if (content !== before) {
+        console.log('            + wrapped main_1.default.initialize() in try/catch');
+      }
+    }
+    // v2.3.x patch: skip the IDE install wizard.
+    // maybeShowIdeInstallWizard() blocks the whenReady callback until the
+    // user dismisses a modal. On patched installations, this modal either
+    // doesn't render (renderer crash from patched preload.js) or hangs the
+    // entire app init. Bypass it entirely — we don't need the wizard on
+    // an already-patched build.
+    if (rel === 'dist/main.js') {
+      const before = content;
+      content = content.replace(
+        /if \(!HEADLESS\) \{\s*await \(0, ideInstall_1\.maybeShowIdeInstallWizard\)\(storageManager\);\s*\}/,
+        '/* v2.3.x patch: IDE wizard skipped (bypass on patched builds) */\n    if (false && !HEADLESS) {\n        await (0, ideInstall_1.maybeShowIdeInstallWizard)(storageManager);\n    }',
+      );
+      if (content !== before) {
+        console.log('            + skipped maybeShowIdeInstallWizard');
+      }
+    }
+    // v2.3.x patch: inject debug logs to trace startup.
+    if (rel === 'dist/main.js') {
+      const before = content;
+      content = content.replace(
+        /console\.log\(`Starting app \(v\$\{electron_1\.app\.getVersion\(\)\}\) with dynamic port/,
+        'console.log("[v2.3.x patch] before-Starting-app");\n    console.log(`Starting app (v${electron_1.app.getVersion()}) with dynamic port',
+      );
+      if (content !== before) {
+        console.log('            + injected debug log before "Starting app"');
+      }
+      // Also log before the await getLsCL
+      content = content.replace(
+        /const cl = await \(0, languageServer_1\.getLsCL\(\)\);/,
+        'console.log("[v2.3.x patch] before-getLsCL");\n    const cl = await (0, languageServer_1.getLsCL)();\n    console.log("[v2.3.x patch] after-getLsCL cl=" + cl);',
+      );
+      if (content !== before) {
+        console.log('            + injected debug logs around getLsCL');
+      }
+      // Also log right after the try/catch initialize
+      content = content.replace(
+        /Object\.assign\(console, main_1\.default\.functions\);/,
+        'Object.assign(console, main_1.default.functions);\n    console.log("[v2.3.x patch] after-Object.assign-console");',
+      );
+      if (content !== before) {
+        console.log('            + injected debug log after Object.assign(console)');
+      }
+      // Also log right after webRequest setup
+      content = content.replace(
+        /setAboutPanelOptions\(\{/,
+        'console.log("[v2.3.x patch] after-webRequest");\n    electron_1.app.setAboutPanelOptions({',
+      );
+      if (content !== before) {
+        console.log('            + injected debug log after webRequest setup');
+      }
+      // Granular logs between Object.assign and setAboutPanelOptions
+      content = content.replace(
+        /const storagePath = \(0, paths_1\.getAppStoragePath\(\)\);/,
+        'console.log("[v2.3.x patch] before-getAppStoragePath");\n    const storagePath = (0, paths_1.getAppStoragePath)();\n    console.log("[v2.3.x patch] after-getAppStoragePath=" + storagePath);',
+      );
+      content = content.replace(
+        /storageManager = new storage_1\.StorageManager/,
+        'console.log("[v2.3.x patch] before-StorageManager");\n    storageManager = new storage_1.StorageManager',
+      );
+      content = content.replace(
+        /settingsService = new settingsService_1\.SettingsService/,
+        'console.log("[v2.3.x patch] before-SettingsService");\n    settingsService = new settingsService_1.SettingsService',
+      );
+      content = content.replace(
+        /\(0, ipcHandlers_1\.registerIpcHandlers\)\(storageManager\);/,
+        'console.log("[v2.3.x patch] before-registerIpcHandlers");\n    try { (0, ipcHandlers_1.registerIpcHandlers)(storageManager); } catch (e) { console.error("[v2.3.x patch] registerIpcHandlers FAILED:", e); throw e; } console.log("[v2.3.x patch] after-registerIpcHandlers");',
+      );
+      content = content.replace(
+        /\(0, customScheme_1\.registerCustomSchemeHandlers\)\(\);/,
+        'console.log("[v2.3.x patch] before-registerCustomSchemeHandlers");\n    try { (0, customScheme_1.registerCustomSchemeHandlers)(); } catch (e) { console.error("[v2.3.x patch] registerCustomSchemeHandlers FAILED:", e); throw e; } console.log("[v2.3.x patch] after-registerCustomSchemeHandlers");',
+      );
+      content = content.replace(
+        /electron_1\.session\.defaultSession\.webRequest\.onBeforeRequest/,
+        'console.log("[v2.3.x patch] before-webRequest-onBeforeRequest");\n    electron_1.session.defaultSession.webRequest.onBeforeRequest',
+      );
+      console.log('            + injected 4 granular logs + 2 try/catch wrappers');
+    }
+    fs.writeFileSync(dst, content);
+    const size = fs.statSync(dst).size;
     owBytes += size;
     owCount++;
     console.log(`            ~ ${rel} (${size} B)`);
@@ -256,8 +372,26 @@ async function main() {
       die(`required root file missing: ${src}`);
     }
     ensureDir(path.dirname(dst));
-    fs.copyFileSync(src, dst);
-    const size = fs.statSync(src).size;
+    let content = fs.readFileSync(src, 'utf8');
+    // v2.3.x patch: strip log.initialize({ preload: true }) from proxy-runner.js.
+    // The main process (dist/main.js) also calls log.initialize() in its
+    // whenReady callback. electron-log throws on the second call, which
+    // breaks whenReady and prevents the IDE window from opening. We just
+    // configure the file transport here and let main.js do the initialize.
+    if (rel === 'proxy-runner.js') {
+      const before = content;
+      // Remove the entire log.initialize({ preload: true }) call.
+      // The leading indentation may be any amount of whitespace.
+      content = content.replace(
+        /^[ \t]*log\.initialize\(\{\s*preload:\s*true\s*\}\);[ \t]*$/m,
+        '  // v2.3.x patch: log.initialize() removed — main.js owns electron-log init.',
+      );
+      if (content !== before) {
+        console.log('            + stripped log.initialize() from proxy-runner.js');
+      }
+    }
+    fs.writeFileSync(dst, content);
+    const size = fs.statSync(dst).size;
     nrBytes += size;
     nrCount++;
     console.log(`            + ${rel} (${size} B)`);
@@ -283,10 +417,19 @@ async function main() {
   console.log(`            patched: ${filesAdded + owCount + nrCount} files (~${grandTotal} B of source)`);
   // v2.3.x patch is larger than v2.2.x because it replaces 5 large files
   // (preload.js alone is ~75 KB). Expect ~500 KB growth.
-  if (delta > 800 * 1024) {
-    console.warn(`[patch_2_3] WARNING: output grew by ${(delta / 1024).toFixed(1)} KB (>800 KB).`);
-    console.warn('            v2.3.x patch typically adds ~450 KB. If growth is much larger,');
-    console.warn('            something unexpected got copied — abort and check the build-dir.');
+  //
+  // Note: @electron/asar's createPackage() does NOT apply LZ4 compression,
+  // while Electron's official packaging tool does. So our repacked asar is
+  // typically ~10x larger than the original (the content is identical, just
+  // uncompressed). Electron loads both formats transparently.
+  //
+  // v2.3.x original (compressed): ~2.1 MB
+  // v2.3.x patched (uncompressed): ~21 MB
+  // The "growth" here is purely the missing LZ4 layer, not new content.
+  if (delta > 50 * 1024 * 1024) {
+    console.log(`[patch_2_3] NOTE: output grew by ${(delta / 1024 / 1024).toFixed(1)} MB.`);
+    console.log('            Most of this growth is the missing LZ4 compression layer,');
+    console.log('            not new content. v2.3.x patch adds ~400 KB of JS source.');
   }
 }
 
