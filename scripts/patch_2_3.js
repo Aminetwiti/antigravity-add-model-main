@@ -90,6 +90,16 @@
 const fs = require('fs');
 const path = require('path');
 const asar = require('@electron/asar');
+const {
+  discoverJavaScriptFiles,
+  assertRequiredArtifacts,
+  copyRelativeFiles,
+  validateAsarInventory,
+} = require('./lib/patch-2-3-artifacts');
+const {
+  stripPreloadLogInitialization,
+  removeLanguageServerProxyStartup,
+} = require('./lib/patch-2-3-source');
 
 // ─── The 25 modules that v2.3.x dropped and we need to re-inject ───────────
 const MISSING_JS_MODULES = [
@@ -144,6 +154,21 @@ const NEW_ROOT_FILES = [
   'proxy-runner.js',
 ];
 
+function buildPatchManifest(repoDir) {
+  const proxyRoot = path.join(repoDir, 'dist', 'proxy');
+  const proxyFiles = discoverJavaScriptFiles(proxyRoot)
+    .map((relativePath) => `dist/proxy/${relativePath}`);
+  return [...new Set([
+    'dist/proxy.js',
+    ...proxyFiles,
+    'dist/cryptoStore.js',
+    'dist/customModelStore.js',
+    'dist/schemaValidator.js',
+    ...OVERWRITE_FILES,
+    ...NEW_ROOT_FILES,
+  ])].sort();
+}
+
 // Optional sibling files to copy alongside each .js module
 const OPTIONAL_SIBLINGS = ['.d.ts', '.js.map', '.d.ts.map'];
 
@@ -191,12 +216,15 @@ async function main() {
   if (!fs.existsSync(asarIn)) die(`asar-in not found: ${asarIn}`);
 
   const repoDir = process.env.AG_REPO_DIR
-    || path.resolve(__dirname, '..', '..');
+    || path.resolve(__dirname, '..');
   const repoDist = path.join(repoDir, 'dist');
 
   if (!fs.existsSync(repoDist)) {
     die(`repo dist/ not found at ${repoDist} — run \`npm run build\` first`);
   }
+
+  const manifest = buildPatchManifest(repoDir);
+  assertRequiredArtifacts(repoDir, manifest);
 
   console.log(`[patch_2_3] asar-in   = ${asarIn}`);
   console.log(`[patch_2_3] build-dir = ${buildDir}`);
@@ -423,6 +451,10 @@ async function main() {
         console.log('            + stripped ' + (dupCount - 1) + ' duplicate \'storage:fetch-models\' registration(s)');
       }
     }
+    if (rel === 'dist/languageServer.js') {
+      content = removeLanguageServerProxyStartup(content);
+      console.log('            + removed duplicate language-server proxy startup');
+    }
     fs.writeFileSync(dst, content);
     const size = fs.statSync(dst).size;
     owBytes += size;
@@ -449,16 +481,8 @@ async function main() {
     // breaks whenReady and prevents the IDE window from opening. We just
     // configure the file transport here and let main.js do the initialize.
     if (rel === 'proxy-runner.js') {
-      const before = content;
-      // Remove the entire log.initialize({ preload: true }) call.
-      // The leading indentation may be any amount of whitespace.
-      content = content.replace(
-        /^[ \t]*log\.initialize\(\{\s*preload:\s*true\s*\}\);[ \t]*$/m,
-        '  // v2.3.x patch: log.initialize() removed — main.js owns electron-log init.',
-      );
-      if (content !== before) {
-        console.log('            + stripped log.initialize() from proxy-runner.js');
-      }
+      content = stripPreloadLogInitialization(content);
+      console.log('            + stripped log.initialize() from proxy-runner.js');
     }
     fs.writeFileSync(dst, content);
     const size = fs.statSync(dst).size;
@@ -473,6 +497,8 @@ async function main() {
   if (fs.existsSync(asarOut)) fs.unlinkSync(asarOut);
   try {
     await asar.createPackage(buildDir, asarOut);
+    validateAsarInventory(asarOut, manifest, asar);
+    console.log(`[patch_2_3] candidate validated: ${manifest.length} required JavaScript files present`);
   } catch (err) {
     die(`asar.createPackage failed: ${err.stack || err.message}`, 3);
   }
@@ -503,4 +529,8 @@ async function main() {
   }
 }
 
-main().catch((err) => die(err.stack || err.message));
+if (require.main === module) {
+  main().catch((err) => die(err.stack || err.message));
+}
+
+module.exports = { buildPatchManifest };

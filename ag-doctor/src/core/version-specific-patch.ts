@@ -12,7 +12,7 @@
  *   - the user wants to test a patch range before it's officially supported
  */
 import fs from 'fs';
-import { getLanguageServerBinary, getLanguageServerBackup } from './paths';
+import { getAppAsarPath, getLanguageServerBinary, getLanguageServerBackup } from './paths';
 import { detectAntigravityVersion } from './antigravity';
 import { getPatchVersionOverride } from './config';
 import type { PatchStatus } from '../types';
@@ -183,6 +183,121 @@ export function inspectBinaryPatchSignature(binaryPath: string): BinarySignature
   return { detected: false, state: 'none' };
 }
 
+export interface OverlayFingerprintStatus {
+  detected: boolean;
+  range: PatchDefinition['versionRange'] | null;
+  confidence: 'high' | 'medium' | 'low';
+  reason: string;
+  signals: string[];
+}
+
+function normalizeAsarEntry(entry: string): string {
+  const normalized = entry.replace(/\\/g, '/');
+  return normalized.startsWith('/') ? normalized : `/${normalized}`;
+}
+
+function hasAsarEntry(entries: string[], entry: string): boolean {
+  const wanted = normalizeAsarEntry(entry);
+  return entries.includes(wanted);
+}
+
+function hasAsarPrefix(entries: string[], prefix: string): boolean {
+  const wanted = normalizeAsarEntry(prefix).replace(/\/$/, '') + '/';
+  return entries.some((entry) => entry.startsWith(wanted));
+}
+
+/**
+ * Inspect the JS bundle footprint inside app.asar to distinguish 2.2 vs 2.3.
+ *
+ * Why this helps:
+ * - 2.2.x still ships the `/dist/proxy/*` overlay tree in the JS bundle.
+ * - 2.3.x removed that tree plus several helper modules from the stock asar.
+ *
+ * This is not used as the only signal, but it is a useful tiebreaker when the
+ * binary URL signature is identical across families.
+ */
+export function inspectOverlayPatchFingerprint(installDir?: string): OverlayFingerprintStatus {
+  const asarPath = getAppAsarPath(installDir);
+  if (!asarPath || !fs.existsSync(asarPath)) {
+    return {
+      detected: false,
+      range: null,
+      confidence: 'low',
+      reason: 'app.asar not found; JS overlay fingerprint unavailable.',
+      signals: [],
+    };
+  }
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const asar = require('@electron/asar');
+    const entries: string[] = (asar.listPackage(asarPath) as string[]).map(normalizeAsarEntry);
+
+    const hasProxyTree = hasAsarPrefix(entries, '/dist/proxy');
+    const hasProxyModelLoader = hasAsarEntry(entries, '/dist/proxy/modelLoader.js');
+    const hasProxyRegistry = hasAsarEntry(entries, '/dist/proxy/registry.js');
+    const hasProxyRunner = hasAsarEntry(entries, '/proxy-runner.js');
+    const hasCryptoStore = hasAsarEntry(entries, '/dist/cryptoStore.js');
+    const hasCustomModelStore = hasAsarEntry(entries, '/dist/customModelStore.js');
+    const hasSchemaValidator = hasAsarEntry(entries, '/dist/schemaValidator.js');
+
+    const signals: string[] = [];
+    if (hasProxyTree || hasProxyModelLoader || hasProxyRegistry) signals.push('proxy-tree-present');
+    if (hasProxyRunner) signals.push('proxy-runner-present');
+    if (!hasCryptoStore && !hasCustomModelStore && !hasSchemaValidator) {
+      signals.push('overlay-helper-modules-missing');
+    }
+
+    if (hasProxyTree || hasProxyModelLoader || hasProxyRegistry) {
+      return {
+        detected: true,
+        range: '2.2.0 - 2.2.x',
+        confidence: hasProxyRunner ? 'high' : 'medium',
+        reason: hasProxyRunner
+          ? 'JS overlay fingerprint matches the 2.2 family: proxy tree and proxy-runner are present in app.asar.'
+          : 'JS overlay fingerprint suggests the 2.2 family because the proxy tree is still present in app.asar.',
+        signals,
+      };
+    }
+
+    if (!hasProxyTree && !hasProxyRunner && !hasCryptoStore && !hasCustomModelStore && !hasSchemaValidator) {
+      return {
+        detected: true,
+        range: '2.3.0+',
+        confidence: 'high',
+        reason: 'JS overlay fingerprint matches stock 2.3+: proxy tree, proxy-runner, and helper overlay modules are all absent from app.asar.',
+        signals,
+      };
+    }
+
+    if (!hasProxyTree && !hasProxyRunner) {
+      return {
+        detected: true,
+        range: '2.3.0+',
+        confidence: 'medium',
+        reason: 'JS overlay fingerprint suggests the 2.3 family because the proxy tree is absent from app.asar.',
+        signals,
+      };
+    }
+
+    return {
+      detected: false,
+      range: null,
+      confidence: 'low',
+      reason: 'JS overlay fingerprint is inconclusive for this installation.',
+      signals,
+    };
+  } catch (error) {
+    return {
+      detected: false,
+      range: null,
+      confidence: 'low',
+      reason: `Failed to inspect app.asar for JS overlay fingerprint: ${(error as Error).message}`,
+      signals: [],
+    };
+  }
+}
+
 /**
  * Detect range-specific binary signatures when available.
  *
@@ -209,6 +324,11 @@ export interface VersionAwarePatchStatus extends PatchStatus {
   binarySignatureDetected?: boolean;
   /** Whether the binary still has the original URL or is already patched. */
   binarySignatureState?: 'original' | 'patched' | 'none';
+  /** JS overlay footprint detected from app.asar to help distinguish 2.2 vs 2.3. */
+  overlayFingerprintDetected?: boolean;
+  overlayFingerprintRange?: string | null;
+  overlayFingerprintConfidence?: 'high' | 'medium' | 'low';
+  overlayFingerprintReason?: string;
   /** Confidence of the auto-detected recommendation. */
   detectionConfidence?: 'high' | 'medium' | 'low';
   /** Short explanation of how the recommendation was derived. */
@@ -243,6 +363,18 @@ export interface VersionAwarePatchStatus extends PatchStatus {
  * version-selector cards, and `detectedPatches` so the UI can show which
  * ranges are actually present in the binary.
  */
+function isReliableVersionSource(source: string): boolean {
+  return source === 'asar' || source === 'product.json';
+}
+
+function isOverlayDistinguishablePatch(patch: PatchDefinition | null): boolean {
+  return !!patch && (patch.versionRange === '2.2.0 - 2.2.x' || patch.versionRange === '2.3.0+');
+}
+
+function findPatchByRange(range: string | null | undefined): PatchDefinition | null {
+  return range ? PATCH_REGISTRY.find((patch) => patch.versionRange === range) ?? null : null;
+}
+
 export function getVersionAwarePatchStatus(installDir?: string): VersionAwarePatchStatus {
   const binaryPath = getLanguageServerBinary(installDir);
   const backupPath = getLanguageServerBackup(installDir);
@@ -266,6 +398,10 @@ export function getVersionAwarePatchStatus(installDir?: string): VersionAwarePat
       detectedPatches: [],
       binarySignatureDetected: false,
       binarySignatureState: 'none',
+      overlayFingerprintDetected: false,
+      overlayFingerprintRange: null,
+      overlayFingerprintConfidence: 'low',
+      overlayFingerprintReason: 'app.asar not inspected because the language_server binary was not found',
       detectionConfidence: 'low',
       detectionReason: 'language_server binary not found',
       compatible: false,
@@ -278,9 +414,12 @@ export function getVersionAwarePatchStatus(installDir?: string): VersionAwarePat
   const versionInfo = detectAntigravityVersion(installDir);
   const version = versionInfo?.version ?? 'unknown';
   const versionSource = versionInfo?.source ?? 'unknown';
+  const reliableVersionSource = isReliableVersionSource(versionSource);
   const detectedPatches = detectAvailablePatches(binaryPath);
   const binarySignature = inspectBinaryPatchSignature(binaryPath);
+  const overlayFingerprint = inspectOverlayPatchFingerprint(installDir);
   const autoRecommended = version !== 'unknown' ? findPatchForVersion(version) : null;
+  const overlayRecommended = findPatchByRange(overlayFingerprint.range);
 
   let recommendedPatch: PatchDefinition | null = autoRecommended;
   let overrideActive = false;
@@ -290,7 +429,7 @@ export function getVersionAwarePatchStatus(installDir?: string): VersionAwarePat
   let detectionReason = 'No reliable detection evidence found yet.';
 
   if (override.range) {
-    const overridden = PATCH_REGISTRY.find((p) => p.versionRange === override.range);
+    const overridden = findPatchByRange(override.range);
     if (overridden) {
       recommendedPatch = overridden;
       overrideActive = true;
@@ -303,12 +442,39 @@ export function getVersionAwarePatchStatus(installDir?: string): VersionAwarePat
         setAt: override.setAt,
       };
     }
+  } else if (
+    autoRecommended &&
+    overlayRecommended &&
+    isOverlayDistinguishablePatch(autoRecommended) &&
+    isOverlayDistinguishablePatch(overlayRecommended)
+  ) {
+    if (autoRecommended.versionRange === overlayRecommended.versionRange) {
+      recommendedPatch = autoRecommended;
+      detectionConfidence = reliableVersionSource && overlayFingerprint.confidence === 'high' ? 'high' : 'medium';
+      detectionReason = `Version ${version} detected from ${versionSource} and JS overlay fingerprint confirms ${overlayRecommended.versionRange}.`;
+    } else if (reliableVersionSource) {
+      recommendedPatch = autoRecommended;
+      detectionConfidence = 'medium';
+      detectionReason = `Version ${version} detected from ${versionSource}, but the JS overlay fingerprint suggests ${overlayRecommended.versionRange}. Metadata was kept because the version source is more reliable.`;
+    } else {
+      recommendedPatch = overlayRecommended;
+      detectionConfidence = 'medium';
+      detectionReason = `Version metadata from ${versionSource} suggested ${autoRecommended.versionRange}, but the JS overlay fingerprint more strongly matches ${overlayRecommended.versionRange}.`;
+    }
   } else if (autoRecommended && binarySignature.detected) {
-    detectionConfidence = versionSource === 'asar' || versionSource === 'product.json' ? 'high' : 'medium';
+    detectionConfidence = reliableVersionSource ? 'high' : 'medium';
     detectionReason = `Version ${version} detected from ${versionSource} and confirmed by the binary URL signature.`;
+  } else if (autoRecommended && overlayRecommended && overlayRecommended.versionRange === autoRecommended.versionRange) {
+    detectionConfidence = reliableVersionSource && overlayFingerprint.confidence === 'high' ? 'medium' : 'low';
+    detectionReason = `Version ${version} detected from ${versionSource}; the binary URL signature is absent, but the JS overlay fingerprint still matches ${overlayRecommended.versionRange}.`;
   } else if (autoRecommended) {
-    detectionConfidence = versionSource === 'asar' || versionSource === 'product.json' ? 'medium' : 'low';
+    detectionConfidence = reliableVersionSource ? 'medium' : 'low';
     detectionReason = `Version ${version} detected from ${versionSource}; binary signature was not found, so compatibility should be verified before patching.`;
+  } else if (overlayRecommended) {
+    recommendedPatch = overlayRecommended;
+    recommendedSource = 'auto';
+    detectionConfidence = binarySignature.detected && overlayFingerprint.confidence === 'high' ? 'medium' : 'low';
+    detectionReason = overlayFingerprint.reason;
   } else if (binarySignature.detected) {
     detectionConfidence = 'low';
     detectionReason = 'Binary signature detected, but version metadata could not identify a specific patch family.';
@@ -325,6 +491,9 @@ export function getVersionAwarePatchStatus(installDir?: string): VersionAwarePat
       version === 'unknown'
         ? 'Cannot determine the Antigravity version automatically. Select a patch family manually.'
         : `No patch is registered for Antigravity ${version}. This version may not be supported yet.`;
+  } else if (!binarySignature.detected && version !== 'unknown') {
+    compatible = false;
+    warningMessage = `Antigravity ${version} was detected from ${versionSource}, but the expected binary URL signature is missing. The language_server binary may belong to another build, may have already been modified, or may no longer match this installation.`;
   } else if (!binarySignature.detected) {
     compatible = false;
     warningMessage = 'The language_server binary does not expose the expected URL signature. Verify the installation before patching.';
@@ -343,6 +512,10 @@ export function getVersionAwarePatchStatus(installDir?: string): VersionAwarePat
     detectedPatches,
     binarySignatureDetected: binarySignature.detected,
     binarySignatureState: binarySignature.state,
+    overlayFingerprintDetected: overlayFingerprint.detected,
+    overlayFingerprintRange: overlayFingerprint.range,
+    overlayFingerprintConfidence: overlayFingerprint.confidence,
+    overlayFingerprintReason: overlayFingerprint.reason,
     detectionConfidence,
     detectionReason,
     compatible,

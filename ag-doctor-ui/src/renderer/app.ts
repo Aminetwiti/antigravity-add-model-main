@@ -219,6 +219,10 @@ interface PatchStatus {
   warningMessage?: string | null;
   binarySignatureDetected?: boolean;
   binarySignatureState?: 'original' | 'patched' | 'none';
+  overlayFingerprintDetected?: boolean;
+  overlayFingerprintRange?: string | null;
+  overlayFingerprintConfidence?: 'high' | 'medium' | 'low';
+  overlayFingerprintReason?: string | null;
   detectionConfidence?: 'high' | 'medium' | 'low';
   detectionReason?: string | null;
   /**
@@ -1594,15 +1598,30 @@ function patchFamilyLabel(range: string): string {
 }
 
 function patchConfidenceLabel(confidence?: PatchStatus['detectionConfidence']): string {
-  if (confidence === 'high') return 'confiance élevée';
+  if (confidence === 'high') return 'confiance forte';
   if (confidence === 'medium') return 'confiance moyenne';
-  return 'à vérifier';
+  return 'confiance faible';
+}
+
+function patchConfidenceTone(confidence?: PatchStatus['detectionConfidence']): 'ok' | 'warn' | 'err' {
+  if (confidence === 'high') return 'ok';
+  if (confidence === 'medium') return 'warn';
+  return 'err';
 }
 
 function patchSignatureLabel(s: PatchStatus): string {
   if (s.binarySignatureState === 'patched') return 'signature binaire : patch déjà présent';
   if (s.binarySignatureState === 'original') return 'signature binaire : binaire d’origine détecté';
   return 'signature binaire absente';
+}
+
+function patchOverlayLabel(s: PatchStatus): string {
+  if (!s.overlayFingerprintDetected || !s.overlayFingerprintRange) return 'empreinte JS overlay absente ou non concluante';
+  return `empreinte JS overlay : ${s.overlayFingerprintRange}`;
+}
+
+function patchNeedsMetadataWithoutBinaryWarning(s: PatchStatus): boolean {
+  return !!(s.antigravityVersion && s.antigravityVersion !== 'unknown' && !s.binarySignatureDetected);
 }
 
 function renderPatchSelector(s: PatchStatus): void {
@@ -1615,7 +1634,11 @@ function renderPatchSelector(s: PatchStatus): void {
     : 'aucune famille recommandée';
 
   const detectorMeta = [
+    `<span class="badge badge-${patchConfidenceTone(s.detectionConfidence)}">${escapeHtml(patchConfidenceLabel(s.detectionConfidence))}</span>`,
     `<span class="badge ${s.binarySignatureDetected ? 'badge-ok' : 'badge-warn'}">${escapeHtml(patchSignatureLabel(s))}</span>`,
+    s.overlayFingerprintDetected
+      ? `<span class="badge ${s.overlayFingerprintConfidence === 'high' ? 'badge-ok' : 'badge-warn'}">${escapeHtml(patchOverlayLabel(s))}</span>`
+      : '',
     s.detectionReason ? `<span class="badge badge-muted">${escapeHtml(s.detectionReason)}</span>` : '',
   ].filter(Boolean).join('');
   patchDetectedMetaEl.innerHTML = `
@@ -1633,6 +1656,9 @@ function renderPatchSelector(s: PatchStatus): void {
   }
 
   const detectedRanges = new Set((s.detectedPatches ?? []).map((p) => p.versionRange));
+  if (s.overlayFingerprintDetected && s.overlayFingerprintRange) {
+    detectedRanges.add(s.overlayFingerprintRange);
+  }
   const recommendedRange = s.recommendedPatch?.versionRange ?? null;
   const cards = (s.availableRanges ?? []).map((range) => {
     const isRecommended = recommendedRange === range.versionRange;
@@ -1649,7 +1675,10 @@ function renderPatchSelector(s: PatchStatus): void {
       patchBadge(patchFamilyLabel(range.versionRange), 'muted'),
       isRecommended ? patchBadge('recommandée', 'ok') : '',
       isSelected ? patchBadge('manuelle', 'warn') : '',
-      isDetected ? patchBadge('signature spécifique détectée', 'ok') : '',
+      isDetected && s.overlayFingerprintRange === range.versionRange
+        ? patchBadge(`empreinte JS overlay · ${patchConfidenceLabel(s.overlayFingerprintConfidence)}`, s.overlayFingerprintConfidence === 'high' ? 'ok' : 'warn')
+        : '',
+      isDetected && s.overlayFingerprintRange !== range.versionRange ? patchBadge('signature spécifique détectée', 'ok') : '',
       !isDetected && s.binarySignatureDetected ? patchBadge('version guidée par métadonnées', 'muted') : patchBadge('à tester manuellement', 'muted'),
     ].filter(Boolean).join('');
     return `
@@ -1725,6 +1754,23 @@ async function loadPatchStatus(): Promise<void> {
                </div>
              </div>`;
 
+    const confidenceHero = `
+      <div class="patch-confidence patch-confidence-${patchConfidenceTone(s.detectionConfidence)}">
+        <div class="patch-confidence-eyebrow">Niveau de confiance</div>
+        <div class="patch-confidence-value">${escapeHtml(patchConfidenceLabel(s.detectionConfidence))}</div>
+        <div class="patch-confidence-text">${escapeHtml(s.detectionReason ?? 'Aucune explication détaillée fournie par l’auto-détection.')}</div>
+      </div>`;
+
+    const metadataWithoutBinaryBanner = patchNeedsMetadataWithoutBinaryWarning(s)
+      ? `<div class="patch-banner err">
+           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+           <div class="patch-banner-body">
+             <div class="patch-banner-title">Version détectée, signature binaire absente</div>
+             <div class="patch-banner-text">Antigravity <code>${escapeHtml(s.antigravityVersion ?? 'inconnue')}</code> a bien été reconnu via <code>${escapeHtml(s.antigravityVersionSource ?? 'métadonnées')}</code>, mais le binaire <code>language_server</code> ne contient pas la signature attendue. Cela peut indiquer un build différent, un binaire déjà modifié, ou une installation mélangée.</div>
+           </div>
+         </div>`
+      : '';
+
     const recommendationRow = s.recommendedPatch
       ? `
       <div class="patch-row">
@@ -1737,12 +1783,21 @@ async function loadPatchStatus(): Promise<void> {
       </div>
       <div class="patch-row">
         <div class="patch-row-label">Confiance</div>
-        <div class="patch-row-value ${s.detectionConfidence === 'high' ? 'ok' : s.detectionConfidence === 'medium' ? 'warn' : 'warn'}">${escapeHtml(patchConfidenceLabel(s.detectionConfidence))}</div>
+        <div class="patch-row-value ${patchConfidenceTone(s.detectionConfidence)}">${escapeHtml(patchConfidenceLabel(s.detectionConfidence))}</div>
       </div>
       <div class="patch-row">
         <div class="patch-row-label">Signature binaire</div>
         <div class="patch-row-value ${s.binarySignatureDetected ? 'ok' : 'warn'}">${escapeHtml(patchSignatureLabel(s))}</div>
       </div>
+      <div class="patch-row">
+        <div class="patch-row-label">Empreinte JS overlay</div>
+        <div class="patch-row-value ${s.overlayFingerprintDetected ? (s.overlayFingerprintConfidence === 'high' ? 'ok' : 'warn') : 'warn'}">${escapeHtml(patchOverlayLabel(s))}</div>
+      </div>
+      ${s.overlayFingerprintReason ? `
+      <div class="patch-row">
+        <div class="patch-row-label">Pourquoi l’empreinte JS</div>
+        <div class="patch-row-value">${escapeHtml(s.overlayFingerprintReason)}</div>
+      </div>` : ''}
       <div class="patch-row">
         <div class="patch-row-label">URL d’origine</div>
         <div class="patch-row-value">${escapeHtml(s.recommendedPatch.originalUrl)}</div>
@@ -1781,6 +1836,8 @@ async function loadPatchStatus(): Promise<void> {
 
     patchTpl.innerHTML = `
       ${banner}
+      ${confidenceHero}
+      ${metadataWithoutBinaryBanner}
       <div class="patch-row">
         <div class="patch-row-label">Version Antigravity</div>
         <div class="patch-row-value">${escapeHtml(s.antigravityVersion ?? 'inconnue')}</div>

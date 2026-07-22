@@ -51,6 +51,10 @@ export async function runPatchStatus(ctx: CommandContext): Promise<number> {
       })),
       binarySignatureDetected: status.binarySignatureDetected ?? false,
       binarySignatureState: status.binarySignatureState ?? 'none',
+      overlayFingerprintDetected: status.overlayFingerprintDetected ?? false,
+      overlayFingerprintRange: status.overlayFingerprintRange ?? null,
+      overlayFingerprintConfidence: status.overlayFingerprintConfidence ?? 'low',
+      overlayFingerprintReason: status.overlayFingerprintReason ?? null,
       detectionConfidence: status.detectionConfidence ?? 'low',
       detectionReason: status.detectionReason ?? null,
       deltaSizeBytes: validateReport?.deltaSizeBytes ?? null,
@@ -124,6 +128,12 @@ export async function runPatchStatus(ctx: CommandContext): Promise<number> {
   } else {
     warn('No known URL patterns detected in binary');
     warn('This may indicate a new Antigravity version that requires patch definition update');
+  }
+  if (status.overlayFingerprintDetected) {
+    info('Detected JS overlay fingerprint:');
+    console.log(`  Family:      ${status.overlayFingerprintRange}`);
+    console.log(`  Confidence:  ${status.overlayFingerprintConfidence}`);
+    console.log(`  Why:         ${status.overlayFingerprintReason}`);
   }
   console.log('');
 
