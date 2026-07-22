@@ -155,18 +155,43 @@ export function findPatchForVersion(version: string): PatchDefinition | null {
 }
 
 /**
- * Detect which patch URLs are present in the binary.
- * Returns an array of found patch definitions.
+ * Coarse binary signature inspection.
+ *
+ * Important: the live `language_server` binary currently uses the same URL
+ * signature across all supported Antigravity families, so a positive match can
+ * confirm that the binary is patchable, but it cannot reliably distinguish
+ * between 2.1, 2.2, and 2.3 on its own.
  */
-export function detectAvailablePatches(binaryPath: string): PatchDefinition[] {
-  if (!fs.existsSync(binaryPath)) return [];
-  
+export interface BinarySignatureStatus {
+  detected: boolean;
+  state: 'original' | 'patched' | 'none';
+}
+
+export function inspectBinaryPatchSignature(binaryPath: string): BinarySignatureStatus {
+  if (!fs.existsSync(binaryPath)) {
+    return { detected: false, state: 'none' };
+  }
+
   const buf = fs.readFileSync(binaryPath);
   const haystack = buf.toString('binary');
-  
-  return PATCH_REGISTRY.filter(patch => {
-    return haystack.includes(patch.originalUrl) || haystack.includes(patch.patchedUrl);
-  });
+  const sample = PATCH_REGISTRY[0];
+  const hasPatched = haystack.includes(sample.patchedUrl);
+  const hasOriginal = haystack.includes(sample.originalUrl);
+
+  if (hasPatched) return { detected: true, state: 'patched' };
+  if (hasOriginal) return { detected: true, state: 'original' };
+  return { detected: false, state: 'none' };
+}
+
+/**
+ * Detect range-specific binary signatures when available.
+ *
+ * Today the supported families share the same URL marker, so this typically
+ * returns an empty array. The generic binary evidence is exposed separately via
+ * `binarySignatureDetected` and `binarySignatureState`.
+ */
+export function detectAvailablePatches(_binaryPath: string): PatchDefinition[] {
+  return [];
 }
 
 /**
@@ -174,10 +199,20 @@ export function detectAvailablePatches(binaryPath: string): PatchDefinition[] {
  */
 export interface VersionAwarePatchStatus extends PatchStatus {
   antigravityVersion: string | null;
+  /** Source of the detected Antigravity version metadata. */
+  antigravityVersionSource?: string;
   /** Patch range the UI should highlight / the user selected (after override resolution). */
   recommendedPatch: PatchDefinition | null;
   /** All patch definitions whose URL pattern is found in the live binary. */
   detectedPatches: PatchDefinition[];
+  /** Generic binary evidence that the expected URL marker exists. */
+  binarySignatureDetected?: boolean;
+  /** Whether the binary still has the original URL or is already patched. */
+  binarySignatureState?: 'original' | 'patched' | 'none';
+  /** Confidence of the auto-detected recommendation. */
+  detectionConfidence?: 'high' | 'medium' | 'low';
+  /** Short explanation of how the recommendation was derived. */
+  detectionReason?: string;
   compatible: boolean;
   warningMessage?: string;
   /** True when the recommended patch came from the user override, not auto-detection. */
@@ -213,7 +248,6 @@ export function getVersionAwarePatchStatus(installDir?: string): VersionAwarePat
   const backupPath = getLanguageServerBackup(installDir);
   const override = getPatchVersionOverride();
 
-  // Base status
   const baseStatus: PatchStatus = {
     binaryPath: binaryPath ?? null,
     exists: binaryPath ? fs.existsSync(binaryPath) : false,
@@ -221,15 +255,19 @@ export function getVersionAwarePatchStatus(installDir?: string): VersionAwarePat
     backupExists: backupPath ? fs.existsSync(backupPath) : false,
   };
 
-  // Always surface the available ranges so the UI can render the selector.
   const availableRanges = PATCH_REGISTRY;
 
   if (!binaryPath || !baseStatus.exists) {
     return {
       ...baseStatus,
       antigravityVersion: null,
+      antigravityVersionSource: 'unknown',
       recommendedPatch: null,
       detectedPatches: [],
+      binarySignatureDetected: false,
+      binarySignatureState: 'none',
+      detectionConfidence: 'low',
+      detectionReason: 'language_server binary not found',
       compatible: false,
       warningMessage: 'Language server binary not found',
       availableRanges,
@@ -237,21 +275,19 @@ export function getVersionAwarePatchStatus(installDir?: string): VersionAwarePat
     };
   }
 
-  // Detect Antigravity version
   const versionInfo = detectAntigravityVersion(installDir);
   const version = versionInfo?.version ?? 'unknown';
-
-  // Detect which patches are available in the binary
+  const versionSource = versionInfo?.source ?? 'unknown';
   const detectedPatches = detectAvailablePatches(binaryPath);
-
-  // Auto-detected recommendation
+  const binarySignature = inspectBinaryPatchSignature(binaryPath);
   const autoRecommended = version !== 'unknown' ? findPatchForVersion(version) : null;
 
-  // Apply override if present and valid; otherwise use auto-detection.
   let recommendedPatch: PatchDefinition | null = autoRecommended;
   let overrideActive = false;
   let recommendedSource: 'auto' | 'override' | 'none' = autoRecommended ? 'auto' : 'none';
   let overrideInfo: VersionAwarePatchStatus['overrideInfo'] | undefined;
+  let detectionConfidence: 'high' | 'medium' | 'low' = 'low';
+  let detectionReason = 'No reliable detection evidence found yet.';
 
   if (override.range) {
     const overridden = PATCH_REGISTRY.find((p) => p.versionRange === override.range);
@@ -259,20 +295,27 @@ export function getVersionAwarePatchStatus(installDir?: string): VersionAwarePat
       recommendedPatch = overridden;
       overrideActive = true;
       recommendedSource = 'override';
+      detectionConfidence = 'high';
+      detectionReason = `Manual override selected ${override.range}.`;
       overrideInfo = {
         range: override.range,
         reason: override.reason,
         setAt: override.setAt,
       };
     }
+  } else if (autoRecommended && binarySignature.detected) {
+    detectionConfidence = versionSource === 'asar' || versionSource === 'product.json' ? 'high' : 'medium';
+    detectionReason = `Version ${version} detected from ${versionSource} and confirmed by the binary URL signature.`;
+  } else if (autoRecommended) {
+    detectionConfidence = versionSource === 'asar' || versionSource === 'product.json' ? 'medium' : 'low';
+    detectionReason = `Version ${version} detected from ${versionSource}; binary signature was not found, so compatibility should be verified before patching.`;
+  } else if (binarySignature.detected) {
+    detectionConfidence = 'low';
+    detectionReason = 'Binary signature detected, but version metadata could not identify a specific patch family.';
   }
 
-  // Check if any patch is applied
-  const buf = fs.readFileSync(binaryPath);
-  const haystack = buf.toString('binary');
-  const applied = detectedPatches.some((p) => haystack.includes(p.patchedUrl));
+  const applied = binarySignature.state === 'patched';
 
-  // Check compatibility (override bypasses auto-detect-specific warnings)
   let compatible = true;
   let warningMessage: string | undefined;
 
@@ -280,14 +323,14 @@ export function getVersionAwarePatchStatus(installDir?: string): VersionAwarePat
     compatible = false;
     warningMessage =
       version === 'unknown'
-        ? 'Cannot determine Antigravity version. Pick a range manually below.'
-        : `No patch available for Antigravity ${version}. This version may not be supported yet.`;
-  } else if (detectedPatches.length === 0) {
+        ? 'Cannot determine the Antigravity version automatically. Select a patch family manually.'
+        : `No patch is registered for Antigravity ${version}. This version may not be supported yet.`;
+  } else if (!binarySignature.detected) {
     compatible = false;
-    warningMessage = `Binary does not contain expected URL pattern. The binary may have been modified by Google.`;
-  } else if (!overrideActive && !detectedPatches.some((p) => p === recommendedPatch)) {
+    warningMessage = 'The language_server binary does not expose the expected URL signature. Verify the installation before patching.';
+  } else if (!overrideActive && version === 'unknown') {
     compatible = false;
-    warningMessage = `Binary contains URL from ${detectedPatches[0].versionRange}, but Antigravity reports version ${version}. Version mismatch detected.`;
+    warningMessage = 'The binary looks patchable, but the installed Antigravity version is unknown. Select a family manually to continue safely.';
   }
 
   return {
@@ -295,8 +338,13 @@ export function getVersionAwarePatchStatus(installDir?: string): VersionAwarePat
     exists: true,
     applied,
     antigravityVersion: version,
+    antigravityVersionSource: versionSource,
     recommendedPatch,
     detectedPatches,
+    binarySignatureDetected: binarySignature.detected,
+    binarySignatureState: binarySignature.state,
+    detectionConfidence,
+    detectionReason,
     compatible,
     warningMessage,
     overrideActive,

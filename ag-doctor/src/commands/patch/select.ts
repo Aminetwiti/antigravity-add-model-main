@@ -6,6 +6,7 @@ import {
   KNOWN_PATCH_RANGES,
   setPatchVersionOverride,
   getPatchVersionOverride,
+  isKnownPatchRange,
 } from '../../core/config';
 import { error, info, ok, warn } from '../../cli/output';
 
@@ -33,6 +34,9 @@ export async function runPatchSelect(ctx: CommandContext, value: string | undefi
   }
 
   try {
+    if (!isKnownPatchRange(value)) {
+      throw new Error(`Unknown patch range "${value}". Known: ${KNOWN_PATCH_RANGES.join(', ')}`);
+    }
     const cfg = setPatchVersionOverride(value, 'set from patch selector');
     const override = getPatchVersionOverride();
     if (ctx.json) {

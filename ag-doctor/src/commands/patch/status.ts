@@ -30,6 +30,7 @@ export async function runPatchStatus(ctx: CommandContext): Promise<number> {
     }
     const jsonOutput = {
       antigravityVersion: status.antigravityVersion,
+      antigravityVersionSource: status.antigravityVersionSource ?? 'unknown',
       binaryPath: status.binaryPath,
       exists: status.exists,
       applied: status.applied,
@@ -48,10 +49,13 @@ export async function runPatchStatus(ctx: CommandContext): Promise<number> {
         originalUrl: p.originalUrl,
         patchedUrl: p.patchedUrl,
       })),
+      binarySignatureDetected: status.binarySignatureDetected ?? false,
+      binarySignatureState: status.binarySignatureState ?? 'none',
+      detectionConfidence: status.detectionConfidence ?? 'low',
+      detectionReason: status.detectionReason ?? null,
       deltaSizeBytes: validateReport?.deltaSizeBytes ?? null,
       verdict,
       validateAsarReport: validateReport,
-      // New fields for version-override UI:
       overrideActive: status.overrideActive ?? false,
       recommendedSource: status.recommendedSource ?? 'auto',
       overrideInfo: status.overrideInfo ?? null,

@@ -1266,8 +1266,128 @@ $('#mitmExportCaBtn').addEventListener('click', () => void mitmAction(['mitm', '
 // Patch view
 // ─────────────────────────────────────────────────────────────────────────────
 const patchStatusEl = $('#patchStatus');
+const patchDetectedVersionEl = $('#patchDetectedVersion');
+const patchDetectedSourceEl = $('#patchDetectedSource');
+const patchRecommendedBadgeEl = $('#patchRecommendedBadge');
+const patchDetectedMetaEl = $('#patchDetectedMeta');
+const patchRangeGridEl = $('#patchRangeGrid');
+const patchOverrideBannerEl = $('#patchOverrideBanner');
+const patchOverrideBannerTextEl = $('#patchOverrideBannerText');
+const patchRescanBtn = $('#patchRescanBtn');
+const patchClearOverrideBtn = $('#patchClearOverrideBtn');
 // Reusable template for patch status — avoids creating a new <template> each load
 const patchTpl = document.createElement('template');
+function patchBadge(label, tone = 'muted') {
+    return `<span class="badge badge-${tone}">${escapeHtml(label)}</span>`;
+}
+function patchSourceLabel(s) {
+    if (s.overrideActive)
+        return 'sélection manuelle';
+    if (s.antigravityVersionSource && s.antigravityVersionSource !== 'unknown') {
+        return `version lue depuis ${s.antigravityVersionSource}`;
+    }
+    return 'détection incertaine';
+}
+function patchFamilyLabel(range) {
+    if (range.includes('2.3'))
+        return 'Famille 2.3';
+    if (range.includes('2.2'))
+        return 'Famille 2.2';
+    return 'Famille 2.1';
+}
+function patchConfidenceLabel(confidence) {
+    if (confidence === 'high')
+        return 'confiance élevée';
+    if (confidence === 'medium')
+        return 'confiance moyenne';
+    return 'à vérifier';
+}
+function patchSignatureLabel(s) {
+    if (s.binarySignatureState === 'patched')
+        return 'signature binaire : patch déjà présent';
+    if (s.binarySignatureState === 'original')
+        return 'signature binaire : binaire d’origine détecté';
+    return 'signature binaire absente';
+}
+function renderPatchSelector(s) {
+    patchDetectedVersionEl.textContent = s.antigravityVersion ?? 'inconnue';
+    patchDetectedSourceEl.className = `badge ${s.overrideActive ? 'badge-warn' : 'badge-muted'}`;
+    patchDetectedSourceEl.textContent = patchSourceLabel(s);
+    patchRecommendedBadgeEl.className = `badge ${s.compatible ? 'badge-ok' : 'badge-warn'}`;
+    patchRecommendedBadgeEl.textContent = s.recommendedPatch
+        ? `${patchFamilyLabel(s.recommendedPatch.versionRange)} · ${patchConfidenceLabel(s.detectionConfidence)}`
+        : 'aucune famille recommandée';
+    const detectorMeta = [
+        `<span class="badge ${s.binarySignatureDetected ? 'badge-ok' : 'badge-warn'}">${escapeHtml(patchSignatureLabel(s))}</span>`,
+        s.detectionReason ? `<span class="badge badge-muted">${escapeHtml(s.detectionReason)}</span>` : '',
+    ].filter(Boolean).join('');
+    patchDetectedMetaEl.innerHTML = `
+    <span class="badge ${s.overrideActive ? 'badge-warn' : 'badge-muted'}">${escapeHtml(patchSourceLabel(s))}</span>
+    <span class="badge ${s.compatible ? 'badge-ok' : 'badge-warn'}">${escapeHtml(s.recommendedPatch ? `${patchFamilyLabel(s.recommendedPatch.versionRange)} · ${patchConfidenceLabel(s.detectionConfidence)}` : 'aucune famille recommandée')}</span>
+    ${detectorMeta}`;
+    if (s.overrideActive && s.overrideInfo?.range) {
+        patchOverrideBannerEl.hidden = false;
+        const reason = s.overrideInfo.reason ? ` — ${s.overrideInfo.reason}` : '';
+        patchOverrideBannerTextEl.textContent = `Famille forcée : ${s.overrideInfo.range}${reason}`;
+    }
+    else {
+        patchOverrideBannerEl.hidden = true;
+        patchOverrideBannerTextEl.textContent = '—';
+    }
+    const detectedRanges = new Set((s.detectedPatches ?? []).map((p) => p.versionRange));
+    const recommendedRange = s.recommendedPatch?.versionRange ?? null;
+    const cards = (s.availableRanges ?? []).map((range) => {
+        const isRecommended = recommendedRange === range.versionRange;
+        const isSelected = s.overrideInfo?.range === range.versionRange;
+        const isDetected = detectedRanges.has(range.versionRange);
+        const classes = [
+            'patch-range-card',
+            isRecommended ? 'recommended' : '',
+            isSelected ? 'selected' : '',
+            isDetected ? 'detected' : '',
+            !s.compatible && isRecommended ? 'incompatible' : '',
+        ].filter(Boolean).join(' ');
+        const tags = [
+            patchBadge(patchFamilyLabel(range.versionRange), 'muted'),
+            isRecommended ? patchBadge('recommandée', 'ok') : '',
+            isSelected ? patchBadge('manuelle', 'warn') : '',
+            isDetected ? patchBadge('signature spécifique détectée', 'ok') : '',
+            !isDetected && s.binarySignatureDetected ? patchBadge('version guidée par métadonnées', 'muted') : patchBadge('à tester manuellement', 'muted'),
+        ].filter(Boolean).join('');
+        return `
+      <div class="${classes}">
+        <div class="patch-range-card-header">
+          <div class="patch-range-card-title">${escapeHtml(range.versionRange)}</div>
+          ${isRecommended ? patchBadge(s.overrideActive ? 'forcée' : 'cible auto', s.overrideActive ? 'warn' : 'ok') : ''}
+        </div>
+        <div class="patch-range-card-body">
+          <div class="patch-range-card-description">${escapeHtml(range.description)}</div>
+          <div class="patch-range-card-tags">${tags}</div>
+          <div class="patch-inline-note">${escapeHtml(range.originalUrl)} → ${escapeHtml(range.patchedUrl)}</div>
+        </div>
+        <div class="patch-range-card-actions">
+          <button class="btn ${isSelected ? 'btn-secondary' : 'btn-ghost'} btn-sm" type="button" data-patch-range="${escapeHtml(range.versionRange)}">${isSelected ? 'Sélectionnée' : 'Choisir cette famille'}</button>
+        </div>
+      </div>`;
+    }).join('');
+    patchRangeGridEl.innerHTML = cards || '<div class="empty-state"><p>Aucune famille de patch disponible.</p></div>';
+}
+async function applyPatchRangeSelection(range) {
+    setStatus(range ? `Sélection de ${range}…` : 'Retour à l’auto-détection…', 'busy');
+    try {
+        const args = range ? ['patch', 'select', range, '--json'] : ['patch', 'select', 'auto', '--json'];
+        const r = await withTimeout(window.ag.run(args), 12_000, 'patch select');
+        if (r.code !== 0) {
+            throw new Error(r.stderr || r.stdout || 'patch select failed');
+        }
+        toast(range ? `Famille de patch définie sur ${range}` : 'Sélection manuelle supprimée', 'ok', 4000);
+        await loadPatchStatus();
+    }
+    catch (e) {
+        toast(`Échec de mise à jour du patch : ${e.message}`, 'err', 7000);
+        setStatus('Erreur', 'err');
+    }
+}
 async function loadPatchStatus() {
     return guardLoad('patch', async () => {
         setStatus('Loading patch status…', 'busy');
@@ -1275,75 +1395,126 @@ async function loadPatchStatus() {
         try {
             const r = await withTimeout(window.ag.run(['patch', 'status', '--json']), 12_000, 'patch status');
             const s = JSON.parse(r.stdout);
+            renderPatchSelector(s);
             const banner = s.applied
                 ? `<div class="patch-banner ok">
              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
              <div class="patch-banner-body">
-               <div class="patch-banner-title">Patch is active</div>
-               <div class="patch-banner-text">language_server is redirected to the local proxy.</div>
+               <div class="patch-banner-title">Patch actif</div>
+               <div class="patch-banner-text"><code>language_server</code> redirige déjà les requêtes vers le proxy local.</div>
              </div>
            </div>`
                 : s.exists
                     ? `<div class="patch-banner warn">
                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
                <div class="patch-banner-body">
-                 <div class="patch-banner-title">Patch is NOT applied</div>
-                 <div class="patch-banner-text">Custom models will not appear in the chat dropdown until the patch is applied.</div>
+                 <div class="patch-banner-title">Patch non appliqué</div>
+                 <div class="patch-banner-text">Les modèles personnalisés n’apparaîtront pas dans le menu tant que cette étape n’est pas appliquée.</div>
                </div>
              </div>`
                     : `<div class="patch-banner err">
                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
                <div class="patch-banner-body">
-                 <div class="patch-banner-title">Binary not found</div>
-                 <div class="patch-banner-text">Could not locate language_server binary.</div>
+                 <div class="patch-banner-title">Binaire introuvable</div>
+                 <div class="patch-banner-text">Impossible de localiser <code>language_server</code> dans l’installation Antigravity.</div>
                </div>
              </div>`;
-            patchTpl.innerHTML = `
-      ${banner}
+            const recommendationRow = s.recommendedPatch
+                ? `
       <div class="patch-row">
-        <div class="patch-row-label">Antigravity Version</div>
-        <div class="patch-row-value">${escapeHtml(s.antigravityVersion ?? 'unknown')}</div>
-      </div>
-      <div class="patch-row">
-        <div class="patch-row-label">Binary path</div>
-        <div class="patch-row-value">${escapeHtml(s.binaryPath ?? '—')}</div>
-      </div>
-      <div class="patch-row">
-        <div class="patch-row-label">Exists</div>
-        <div class="patch-row-value ${s.exists ? 'ok' : 'err'}">${s.exists ? 'yes' : 'no'}</div>
-      </div>
-      <div class="patch-row">
-        <div class="patch-row-label">Applied</div>
-        <div class="patch-row-value ${s.applied ? 'ok' : 'warn'}">${s.applied ? 'yes' : 'no'}</div>
-      </div>
-      <div class="patch-row">
-        <div class="patch-row-label">Backup</div>
-        <div class="patch-row-value ${s.backupExists ? 'ok' : ''}">${s.backupExists ? 'yes' : 'no'}</div>
-      </div>
-      <div class="patch-row">
-        <div class="patch-row-label">Compatible</div>
-        <div class="patch-row-value ${s.compatible ? 'ok' : 'warn'}">${s.compatible ? 'yes' : 'no'}</div>
-      </div>
-      ${s.recommendedPatch ? `
-      <div class="patch-row">
-        <div class="patch-row-label">Version Range</div>
+        <div class="patch-row-label">Famille recommandée</div>
         <div class="patch-row-value">${escapeHtml(s.recommendedPatch.versionRange)}</div>
       </div>
       <div class="patch-row">
-        <div class="patch-row-label">Original URL</div>
+        <div class="patch-row-label">Source de recommandation</div>
+        <div class="patch-row-value ${s.overrideActive ? 'warn' : 'ok'}">${escapeHtml(s.overrideActive ? 'sélection manuelle' : 'auto-détection')}</div>
+      </div>
+      <div class="patch-row">
+        <div class="patch-row-label">Confiance</div>
+        <div class="patch-row-value ${s.detectionConfidence === 'high' ? 'ok' : s.detectionConfidence === 'medium' ? 'warn' : 'warn'}">${escapeHtml(patchConfidenceLabel(s.detectionConfidence))}</div>
+      </div>
+      <div class="patch-row">
+        <div class="patch-row-label">Signature binaire</div>
+        <div class="patch-row-value ${s.binarySignatureDetected ? 'ok' : 'warn'}">${escapeHtml(patchSignatureLabel(s))}</div>
+      </div>
+      <div class="patch-row">
+        <div class="patch-row-label">URL d’origine</div>
         <div class="patch-row-value">${escapeHtml(s.recommendedPatch.originalUrl)}</div>
       </div>
       <div class="patch-row">
-        <div class="patch-row-label">Patched URL</div>
+        <div class="patch-row-label">URL patchée</div>
         <div class="patch-row-value">${escapeHtml(s.recommendedPatch.patchedUrl)}</div>
+      </div>`
+                : '';
+            const overrideRow = s.overrideInfo?.range
+                ? `
+      <div class="patch-row">
+        <div class="patch-row-label">Sélection manuelle</div>
+        <div class="patch-row-value warn">${escapeHtml(s.overrideInfo.range)}</div>
+      </div>
+      ${s.overrideInfo.reason ? `
+      <div class="patch-row">
+        <div class="patch-row-label">Motif</div>
+        <div class="patch-row-value warn">${escapeHtml(s.overrideInfo.reason)}</div>
+      </div>` : ''}`
+                : '';
+            const suggestions = `
+      <div class="patch-row patch-suggestions">
+        <div class="patch-row-label">Conseils</div>
+        <div class="patch-row-value" style="max-width:100%; text-align:left;">
+          <ul class="patch-suggestion-list">
+            <li>Laissez l’auto-détection active par défaut et ne forcez une famille que si la version trouvée vous semble incohérente.</li>
+            <li>Gardez toujours un backup propre avant de passer d’une famille 2.1, 2.2 ou 2.3 à une autre.</li>
+            <li>Pour 2.2.x et 2.3.x, vérifiez aussi l’état MITM et le certificat CA avant d’appliquer le patch.</li>
+            <li>Si les métadonnées et la signature binaire ne racontent pas la même chose, restaurez d’abord puis testez une autre famille manuellement.</li>
+          </ul>
+        </div>
+      </div>`;
+            patchTpl.innerHTML = `
+      ${banner}
+      <div class="patch-row">
+        <div class="patch-row-label">Version Antigravity</div>
+        <div class="patch-row-value">${escapeHtml(s.antigravityVersion ?? 'inconnue')}</div>
+      </div>
+      <div class="patch-row">
+        <div class="patch-row-label">Source version</div>
+        <div class="patch-row-value">${escapeHtml(s.antigravityVersionSource ?? 'unknown')}</div>
+      </div>
+      <div class="patch-row">
+        <div class="patch-row-label">Chemin du binaire</div>
+        <div class="patch-row-value">${escapeHtml(s.binaryPath ?? '—')}</div>
+      </div>
+      <div class="patch-row">
+        <div class="patch-row-label">Présent</div>
+        <div class="patch-row-value ${s.exists ? 'ok' : 'err'}">${s.exists ? 'oui' : 'non'}</div>
+      </div>
+      <div class="patch-row">
+        <div class="patch-row-label">Déjà patché</div>
+        <div class="patch-row-value ${s.applied ? 'ok' : 'warn'}">${s.applied ? 'oui' : 'non'}</div>
+      </div>
+      <div class="patch-row">
+        <div class="patch-row-label">Backup</div>
+        <div class="patch-row-value ${s.backupExists ? 'ok' : ''}">${s.backupExists ? 'oui' : 'non'}</div>
+      </div>
+      <div class="patch-row">
+        <div class="patch-row-label">Compatibilité</div>
+        <div class="patch-row-value ${s.compatible ? 'ok' : 'warn'}">${s.compatible ? 'ok' : 'à vérifier'}</div>
+      </div>
+      ${s.detectionReason ? `
+      <div class="patch-row">
+        <div class="patch-row-label">Pourquoi cette recommandation</div>
+        <div class="patch-row-value">${escapeHtml(s.detectionReason)}</div>
       </div>` : ''}
+      ${recommendationRow}
+      ${overrideRow}
       ${s.warningMessage ? `
       <div class="patch-row">
-        <div class="patch-row-label">Warning</div>
+        <div class="patch-row-label">Avertissement</div>
         <div class="patch-row-value warn">${escapeHtml(s.warningMessage)}</div>
-      </div>` : ''}`;
+      </div>` : ''}
+      ${suggestions}`;
             patchStatusEl.replaceChildren(patchTpl.content);
-            setStatus('Ready');
+            setStatus('Prêt');
         }
         catch (e) {
             patchStatusEl.innerHTML = `<div class="empty-state"><p>Error: ${escapeHtml(e.message)}</p></div>`;
@@ -1353,6 +1524,18 @@ async function loadPatchStatus() {
         }
     });
 }
+patchRescanBtn.addEventListener('click', () => void loadPatchStatus());
+patchClearOverrideBtn.addEventListener('click', () => void applyPatchRangeSelection(null));
+patchRangeGridEl.addEventListener('click', (event) => {
+    const target = event.target;
+    const button = target?.closest('[data-patch-range]');
+    if (!button)
+        return;
+    const range = button.getAttribute('data-patch-range');
+    if (!range)
+        return;
+    void applyPatchRangeSelection(range);
+});
 $('#patchApplyBtn').addEventListener('click', async () => {
     // P1.3 (subset) — Pré-validation delta size avant d'ouvrir la confirmation.
     // On récupère le statut patch actuel et on valide l'état du binaire
