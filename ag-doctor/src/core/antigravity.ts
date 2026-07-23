@@ -297,7 +297,13 @@ export async function getAntigravityStatus(proxyPort = 50999): Promise<Antigravi
   };
 }
 
-/** Launch Antigravity. Returns the spawned PID or null on failure. */
+async function requestWindowsGuiLaunch(winExe: string, winDir: string): Promise<void> {
+  await execFileAsync('cmd.exe', ['/c', 'start', '', '/d', winDir, winExe], {
+    windowsHide: false,
+  });
+}
+
+/** Launch Antigravity and try to surface the real GUI window, not only a background PID. */
 export async function launchAntigravity(): Promise<{ ok: boolean; pid?: number; message: string }> {
   const dir = findAntigravityInstallDir();
   if (!dir) return { ok: false, message: 'Antigravity not found on disk' };

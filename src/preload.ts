@@ -949,7 +949,7 @@ window.addEventListener('DOMContentLoaded', () => {
        state.apiUrl = urlInp.input.value;
        state.apiKey = keyInp.input.value || state.apiKey;
        
-       const res = await storageAPI.fetchModels({ baseUrl: state.apiUrl, apiKey: state.apiKey, allowUnauthorized: state.allowUnauthorized });
+       const res = await storageAPI.fetchModels({ baseUrl: state.apiUrl, apiUrl: state.apiUrl, apiKey: state.apiKey, allowUnauthorized: state.allowUnauthorized });
        fetchBtn.textContent = '🔄 Fetch Available Models';
        fetchBtn.disabled = false;
        

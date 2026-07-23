@@ -573,6 +573,7 @@ function registerIpcHandlers(storageManager) {
         }
     });
     // Auto-updater manual check
+    electron_1.ipcMain.handle('updater:get-state', () => ({ type: 'idle' }));
     electron_1.ipcMain.handle('updater:check-for-updates', () => {
         (0, updater_1.checkForUpdates)(true);
     });

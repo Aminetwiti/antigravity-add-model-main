@@ -43,9 +43,10 @@ function copyRelativeFiles(sourceRoot, destinationRoot, relativePaths, fsImpl = 
 }
 
 function validateAsarInventory(archivePath, requiredPaths, asarImpl) {
-  const inventory = new Set(asarImpl.listPackage(archivePath));
+  const normalize = (entry) => `/${entry.replaceAll('\\', '/').replace(/^\/+/, '')}`;
+  const inventory = new Set(asarImpl.listPackage(archivePath).map(normalize));
   const missing = requiredPaths
-    .map((relativePath) => `/${relativePath.replaceAll('\\', '/')}`)
+    .map(normalize)
     .filter((relativePath) => !inventory.has(relativePath))
     .sort();
   if (missing.length > 0) {

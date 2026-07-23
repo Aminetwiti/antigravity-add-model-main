@@ -510,6 +510,30 @@
               </div>
             </div>
 
+            <div class="patch-legend" aria-label="Légende de détection du patch">
+              <div class="patch-legend-title">Comment lire la détection</div>
+              <div class="patch-legend-items">
+                <button
+                  class="patch-legend-item"
+                  type="button"
+                  data-tooltip="Signature binaire : vérifie si le binaire language_server contient encore l’URL originale ou déjà l’URL patchée. C’est le meilleur signal pour savoir si le binaire reste patchable."
+                  aria-label="Explication signature binaire"
+                >
+                  <span class="badge badge-info">Signature binaire</span>
+                  <span class="patch-legend-text">indique si le binaire contient la signature d’URL attendue</span>
+                </button>
+                <button
+                  class="patch-legend-item"
+                  type="button"
+                  data-tooltip="Empreinte JS overlay : inspecte le contenu de app.asar (proxy-runner, dist/proxy, modules overlay) pour différencier surtout 2.2.x et 2.3.x quand la signature binaire seule ne suffit pas."
+                  aria-label="Explication empreinte JS overlay"
+                >
+                  <span class="badge badge-muted">Empreinte JS overlay</span>
+                  <span class="patch-legend-text">analyse app.asar pour séparer plus finement 2.2.x et 2.3.x</span>
+                </button>
+              </div>
+            </div>
+
             <!-- Three patch range cards (2.1 / 2.2 / 2.3) -->
             <div class="patch-range-grid" id="patchRangeGrid">
               <div class="skeleton skeleton-card"></div>

@@ -61,8 +61,13 @@ class CdpClient {
 (async () => {
   try {
     const targets = await getJson('/json');
-    const page = targets.find((t) => t.type === 'page');
+    // Prefer the https:// page (real Antigravity) over the data: splash
+    const page = targets.find((t) => t.type === 'page' && t.url.startsWith('https://'))
+      || targets.find((t) => t.type === 'page');
     if (!page) { console.log('No page target'); process.exit(1); }
+    console.log('=== Probing target ===');
+    console.log('  url:', page.url);
+    console.log('  title:', page.title);
 
     const ws = new WebSocket(page.webSocketDebuggerUrl);
     await new Promise((res, rej) => { ws.once('open', res); ws.once('error', rej); });

@@ -99,6 +99,9 @@ const {
 const {
   stripPreloadLogInitialization,
   removeLanguageServerProxyStartup,
+  removeSandboxedPreloadLocalImports,
+  addIdeBridgeToPreload,
+  addUpdaterStateBridgeToPreload,
 } = require('./lib/patch-2-3-source');
 
 // ─── The 25 modules that v2.3.x dropped and we need to re-inject ───────────
@@ -454,6 +457,12 @@ async function main() {
     if (rel === 'dist/languageServer.js') {
       content = removeLanguageServerProxyStartup(content);
       console.log('            + removed duplicate language-server proxy startup');
+    }
+    if (rel === 'dist/preload.js') {
+      content = removeSandboxedPreloadLocalImports(content);
+      content = addIdeBridgeToPreload(content);
+      content = addUpdaterStateBridgeToPreload(content);
+      console.log('            + embedded sandbox-safe preload helpers and 2.3.1 bridges');
     }
     fs.writeFileSync(dst, content);
     const size = fs.statSync(dst).size;

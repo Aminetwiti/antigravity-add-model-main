@@ -111,6 +111,26 @@ describe('validateAsarInventory', () => {
       ),
     ).not.toThrow();
   });
+  it('accepts Windows-style paths returned by @electron/asar', () => {
+    const asarImpl = {
+      listPackage: () => [
+        '\\dist\\proxy.js',
+        '\\dist\\proxy\\idGenerator.js',
+        '\\dist\\proxy\\errorClassifier.js',
+      ],
+    };
+    expect(() =>
+      validateAsarInventory(
+        'candidate.asar',
+        [
+          'dist/proxy.js',
+          'dist/proxy/idGenerator.js',
+          'dist/proxy/errorClassifier.js',
+        ],
+        asarImpl,
+      ),
+    ).not.toThrow();
+  });
 });
 
 describe('buildPatchManifest', () => {

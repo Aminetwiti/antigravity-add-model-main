@@ -351,7 +351,12 @@ export function registerIpcHandlers(storageManager: StorageManager): void {
         // e.g. https://api.openai.com/v1/chat/completions → /v1/models
         // e.g. https://api.anthropic.com/v1/messages → /v1/models
         // e.g. http://localhost:11434/v1/chat/completions → /v1/models
-        let baseUrl = params.apiUrl;
+        let baseUrl = params.apiUrl || (params as any).baseUrl;
+
+        if (!baseUrl) {
+          resolve({ success: false, error: 'No API URL provided' });
+          return;
+        }
 
         // Strip the chat/completions or /messages path to get the base
         const urlLower = baseUrl.toLowerCase();
@@ -569,6 +574,7 @@ export function registerIpcHandlers(storageManager: StorageManager): void {
   });
 
   // Auto-updater manual check
+  ipcMain.handle('updater:get-state', () => ({ type: 'idle' }));
   ipcMain.handle('updater:check-for-updates', () => {
     checkForUpdates(true);
   });
