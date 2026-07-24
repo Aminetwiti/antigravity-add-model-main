@@ -12,6 +12,7 @@
  *   - the user wants to test a patch range before it's officially supported
  */
 import fs from 'fs';
+import * as asar from '@electron/asar';
 import { getAppAsarPath, getLanguageServerBinary, getLanguageServerBackup } from './paths';
 import { detectAntigravityVersion } from './antigravity';
 import { getPatchVersionOverride } from './config';
@@ -229,8 +230,6 @@ export function inspectOverlayPatchFingerprint(installDir?: string): OverlayFing
   }
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const asar = require('@electron/asar');
     const entries: string[] = (asar.listPackage(asarPath) as string[]).map(normalizeAsarEntry);
 
     const hasProxyTree = hasAsarPrefix(entries, '/dist/proxy');

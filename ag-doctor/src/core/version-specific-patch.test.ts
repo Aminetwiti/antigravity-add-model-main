@@ -1,9 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mockExistsSync = vi.fn();
-const mockReadFileSync = vi.fn();
-const mockGetAppAsarPath = vi.fn<(installDir?: string) => string | null>();
-const mockListPackage = vi.fn<(asarPath: string) => string[]>();
+const {
+  mockExistsSync,
+  mockReadFileSync,
+  mockGetAppAsarPath,
+  mockListPackage,
+} = vi.hoisted(() => ({
+  mockExistsSync: vi.fn(),
+  mockReadFileSync: vi.fn(),
+  mockGetAppAsarPath: vi.fn<(installDir?: string) => string | null>(),
+  mockListPackage: vi.fn<(asarPath: string) => string[]>(),
+}));
 
 vi.mock('fs', () => ({
   default: {
@@ -27,6 +34,9 @@ vi.mock('./config', () => ({
 }));
 
 vi.mock('@electron/asar', () => ({
+  default: {
+    listPackage: mockListPackage,
+  },
   listPackage: mockListPackage,
 }));
 

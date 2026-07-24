@@ -1012,43 +1012,83 @@ body {
 .patch-legend {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
   border-radius: var(--r-md);
-  border: 1px dashed var(--border);
+  border: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-1) 88%, var(--bg-2) 12%);
+  overflow: hidden;
+  transition: border-color var(--t-fast);
 }
-.patch-legend-title {
+.patch-legend[open] {
+  border-color: color-mix(in srgb, var(--border) 70%, var(--info-border) 30%);
+}
+.patch-legend-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
   font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: .08em;
   color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
 }
-.patch-legend-items {
+.patch-legend-summary::-webkit-details-marker {
+  display: none;
+}
+.patch-legend-summary:hover {
+  color: var(--text-1);
+  background: color-mix(in srgb, var(--bg-2) 60%, transparent);
+}
+.patch-legend-icon {
+  color: var(--info);
+  flex-shrink: 0;
+}
+.patch-legend-title {
+  flex: 1;
+}
+.patch-legend-chevron {
+  transition: transform var(--t-fast);
+  color: var(--text-3);
+}
+.patch-legend[open] .patch-legend-chevron {
+  transform: rotate(180deg);
+}
+.patch-legend-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 12px;
+  padding: 4px 14px 14px 14px;
+  margin: 0;
 }
-.patch-legend-item {
+.patch-legend-row {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
+  gap: 6px;
   padding: 10px 12px;
   border-radius: var(--r-sm);
   border: 1px solid var(--border);
   background: var(--bg-1);
-  color: inherit;
-  text-align: left;
-  cursor: help;
 }
-.patch-legend-item:hover {
-  border-color: var(--info-border);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--info-border) 65%, transparent) inset;
+.patch-legend-term {
+  display: flex;
+  align-items: center;
+  margin: 0;
 }
-.patch-legend-text {
+.patch-legend-def {
   font-size: 11.5px;
   line-height: 1.5;
+  color: var(--text-2);
+  margin: 0;
+}
+.patch-legend-def code {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-2);
   color: var(--text-1);
 }
 .patch-range-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }

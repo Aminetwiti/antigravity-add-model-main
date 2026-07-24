@@ -135,7 +135,17 @@ export async function loadCustomModels(): Promise<CustomModelFileEntry[]> {
 export async function saveCustomModels(models: CustomModelFileEntry[]): Promise<void> {
   const filePath = getCustomModelsPath();
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify({ models }, null, 2), 'utf-8');
+
+  // Preserve existing providers key when saving models
+  let existing: Record<string, unknown> = {};
+  try {
+    const content = await fs.readFile(filePath, 'utf-8');
+    existing = JSON.parse(stripBom(content)) as Record<string, unknown>;
+  } catch {
+    // File doesn't exist yet, start fresh
+  }
+  existing.models = models;
+  await fs.writeFile(filePath, JSON.stringify(existing, null, 2), 'utf-8');
 }
 
 export async function loadProviders(): Promise<ProviderFileEntry[]> {
@@ -189,7 +199,17 @@ export async function loadProviders(): Promise<ProviderFileEntry[]> {
 export async function saveProviders(providers: ProviderFileEntry[]): Promise<void> {
   const filePath = getCustomModelsPath();
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify({ providers }, null, 2), 'utf-8');
+
+  // Preserve existing models key when saving providers
+  let existing: Record<string, unknown> = {};
+  try {
+    const content = await fs.readFile(filePath, 'utf-8');
+    existing = JSON.parse(stripBom(content)) as Record<string, unknown>;
+  } catch {
+    // File doesn't exist yet, start fresh
+  }
+  existing.providers = providers;
+  await fs.writeFile(filePath, JSON.stringify(existing, null, 2), 'utf-8');
 }
 
 /**
